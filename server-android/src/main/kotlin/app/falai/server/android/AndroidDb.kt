@@ -1,9 +1,12 @@
 package app.falai.server.android
 
+import app.falai.protocol.*
+import app.falai.db.*
+
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
-import app.falai.server.Db
-import app.falai.server.Row
+
+
 
 /** Implementação de [Db] com o SQLite do próprio Android. */
 class AndroidDb(path: String) : Db {

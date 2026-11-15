@@ -1,4 +1,4 @@
-package app.falai.server
+package app.falai.protocol
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable

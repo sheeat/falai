@@ -2,22 +2,34 @@
 
 Mensageiro da família. Um celular antigo fica em casa como servidor, e os celulares e tablets da família se conectam a ele pela internet através do Cloudflare Tunnel.
 
-## Estado atual: M1 (servidor básico)
+## Estado atual: M2 (app da família, só texto)
 
 | Parte | O que faz | Testado |
 |---|---|---|
+| `shared` | Protocolo (JSON) e acesso ao banco, usados pelo servidor e pelo app | Pelos testes abaixo |
 | `server-core` | Servidor em Kotlin puro: pareamento por convite, token por aparelho, WebSocket com mensagens de texto em tempo real, histórico completo com sync em lotes, conversas diretas e grupos | Sim, 14 testes automatizados |
-| `server-android` | App Android que mantém o servidor ligado: serviço em primeiro plano, wake lock, liga sozinho no boot, tela com status e código do admin | Não. Precisa ser testado no celular |
+| `server-android` | App Android que mantém o servidor ligado: serviço em primeiro plano, wake lock, liga sozinho no boot, tela com status e código do admin | Sim, no celular (M1) |
+| `client-core` | "Motor" do app da família: pareamento, conexão com reconexão automática, fila de envio sem internet, sync do histórico, banco local | Sim, 11 testes contra o servidor de verdade |
+| `app` | App da família (Jetpack Compose): pareamento, lista de conversas, chat, nova conversa/grupo, convites (admin) | Telas conferidas por compilação; precisa ser testado no celular |
 
-Ainda não tem: app da família (M2), mídia (M3), chamadas (M4), FCM, criptografia no app.
+Ainda não tem: notificações com o app fechado (FCM), mídia (M3), chamadas (M4), criptografia no app.
 
 ## Rodar os testes (PC)
 
 Precisa só de um JDK 17 ou mais novo.
 
 ```bash
-./gradlew :server-core:test
+./gradlew :server-core:test :client-core:test
 ```
+
+## Testar o app da família em casa (sem Cloudflare ainda)
+
+O servidor só aceita conexões do próprio celular-servidor, então em casa o teste é assim:
+
+- **No próprio celular-servidor:** instale também o app `app` e use o endereço `http://127.0.0.1:8443`.
+- **No emulador do Android Studio:** com o celular-servidor no cabo, rode `adb forward tcp:8443 tcp:8443` e use o endereço `http://10.0.2.2:8443` (o emulador enxerga o PC nesse endereço, e o PC repassa para o celular).
+
+Assim dá para conversar entre o celular-servidor e o emulador.
 
 ## Rodar o servidor no PC (para experimentar)
 

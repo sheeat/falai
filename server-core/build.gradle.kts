@@ -19,6 +19,7 @@ kotlin {
 }
 
 dependencies {
+    api(project(":shared"))
     api("io.ktor:ktor-server-core:$ktorVersion")
     api("io.ktor:ktor-server-cio:$ktorVersion")
     api("io.ktor:ktor-server-websockets:$ktorVersion")
