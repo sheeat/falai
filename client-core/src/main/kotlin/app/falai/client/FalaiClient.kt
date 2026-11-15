@@ -60,6 +60,8 @@ class FalaiClientException(val code: String, message: String) : Exception(messag
 class FalaiClient(
     val store: ClientStore,
     private val scope: CoroutineScope,
+    /** Pasta deste aparelho onde ficam os arquivos baixados e enviados. */
+    private val mediaDir: java.io.File,
     private val http: OkHttpClient = defaultHttp(),
     private val log: (String) -> Unit = {},
     private val reconnectDelaysMs: List<Long> = listOf(1_000, 2_000, 5_000, 10_000, 30_000),
@@ -225,8 +227,9 @@ class FalaiClient(
                 sendFrame(ws, ListUsersFrame("hello-users"))
                 sendFrame(ws, SyncFrame(store.syncedSeq()))
                 // Esvazia a fila: tudo que foi escrito sem conexão sai agora, na ordem.
-                store.pending().forEach { sendFrame(ws, SendFrame(it.id, it.conversationId, it.body)) }
+                store.pending().forEach { sendFrame(ws, SendFrame(it.id, it.conversationId, it.body, it.attachment)) }
                 bump()
+                kickUploads()
             }
             is AckFrame -> { store.markSent(f.id, f.seq, f.createdAt); bump() }
             is MessageFrame -> { store.upsertFromServer(f.message, acc.userId); bump() }
@@ -310,7 +313,194 @@ class FalaiClient(
         request(id, ListUsersFrame(id))
     }
 
+    // ---------- Arquivos ----------
+
+    private val _uploadProgress = MutableStateFlow<Map<String, Float>>(emptyMap())
+    /** Progresso de envio por id de mensagem (0.0 a 1.0). */
+    val uploadProgress: StateFlow<Map<String, Float>> = _uploadProgress.asStateFlow()
+
+    private var uploadJob: Job? = null
+    private val downloadLocks = ConcurrentHashMap<String, kotlinx.coroutines.sync.Mutex>()
+
+    /**
+     * Envia um arquivo que já está na pasta do app. A mensagem aparece na hora com o relógio;
+     * o arquivo sobe em pedaços e, quando termina, a mensagem é enviada.
+     */
+    fun sendMedia(
+        conversationId: String,
+        file: java.io.File,
+        kind: String,
+        mime: String,
+        name: String = file.name,
+        durationMs: Long? = null,
+        caption: String = "",
+    ): LocalMessage {
+        val acc = store.account() ?: throw FalaiClientException("not_paired", "Aparelho não pareado.")
+        require(file.exists() && file.length() > 0) { "Arquivo vazio" }
+        if (file.length() > app.falai.protocol.MEDIA_MAX_BYTES) {
+            throw FalaiClientException("too_large", "Arquivo grande demais (máximo 2 GB).")
+        }
+        val att = app.falai.protocol.AttachmentDto(
+            mediaId = "", kind = kind, mime = mime, name = name,
+            size = file.length(), sha256 = sha256Hex(file), durationMs = durationMs,
+        )
+        val m = store.insertPendingMedia(UUID.randomUUID().toString(), conversationId, acc.userId, caption.trim(), att, file.path)
+        bump()
+        kickUploads()
+        return m
+    }
+
+    /** Começa (ou continua) a subir os arquivos da fila, um por vez. */
+    fun kickUploads() {
+        if (uploadJob?.isActive == true) return
+        uploadJob = scope.launch(Dispatchers.IO) {
+            while (isActive) {
+                val next = store.outgoingToUpload().firstOrNull() ?: break
+                val ok = try {
+                    upload(next)
+                    true
+                } catch (e: FalaiClientException) {
+                    log("Envio de arquivo falhou: ${e.code} ${e.message}")
+                    if (e.code == "not_found") {
+                        // O servidor não conhece mais esse envio: recomeça do zero.
+                        store.resetOutgoingMediaId(next.messageId)
+                        true
+                    } else if (e.code in setOf("too_large", "forbidden", "invalid", "missing")) {
+                        store.markFailed(next.messageId)
+                        bump()
+                        true // segue para o próximo
+                    } else false
+                } catch (e: IOException) {
+                    log("Envio de arquivo interrompido: ${e.message}")
+                    false
+                }
+                if (!ok) {
+                    // Sem conexão: tenta de novo daqui a pouco (ou quando reconectar).
+                    delay(reconnectDelaysMs.last())
+                }
+            }
+        }
+    }
+
+    private fun authed(b: Request.Builder, acc: Account) = b.header("Authorization", "Bearer ${acc.token}")
+
+    private fun <T> call(req: Request, parse: (String) -> T): T {
+        http.newCall(req).execute().use { r ->
+            val text = r.body?.string().orEmpty()
+            if (!r.isSuccessful) {
+                val err = runCatching { FalaiJson.decodeFromString(ErrorResponse.serializer(), text) }.getOrNull()
+                if (r.code >= 500 || err == null) throw IOException("HTTP ${r.code}")
+                throw FalaiClientException(err.error, err.message)
+            }
+            return parse(text)
+        }
+    }
+
+    private fun upload(o: OutgoingMedia) {
+        val acc = store.account() ?: return
+        val file = java.io.File(o.path)
+        if (!file.exists()) throw FalaiClientException("missing", "O arquivo não existe mais neste aparelho.")
+        val json = "application/json".toMediaType()
+        val parseStatus = { t: String -> FalaiJson.decodeFromString(app.falai.protocol.MediaStatus.serializer(), t) }
+
+        var status = if (o.mediaId == null) {
+            val body = FalaiJson.encodeToString(
+                app.falai.protocol.MediaCreateRequest.serializer(),
+                app.falai.protocol.MediaCreateRequest(o.attachment.size, o.attachment.sha256, o.attachment.mime, o.attachment.name),
+            )
+            call(authed(Request.Builder().url("${acc.serverUrl}/api/media").post(body.toRequestBody(json)), acc).build(), parseStatus)
+                .also { store.setOutgoingMediaId(o.messageId, it.mediaId) }
+        } else {
+            // Retomando: pergunta ao servidor onde parou.
+            call(authed(Request.Builder().url("${acc.serverUrl}/api/media/${o.mediaId}/status"), acc).build(), parseStatus)
+        }
+
+        java.io.RandomAccessFile(file, "r").use { raf ->
+            val buf = ByteArray(app.falai.protocol.MEDIA_CHUNK_BYTES)
+            while (!status.complete) {
+                raf.seek(status.received)
+                val want = minOf(buf.size.toLong(), status.size - status.received).toInt()
+                raf.readFully(buf, 0, want)
+                val req = authed(
+                    Request.Builder()
+                        .url("${acc.serverUrl}/api/media/${status.mediaId}?offset=${status.received}")
+                        .put(buf.toRequestBody("application/octet-stream".toMediaType(), 0, want)),
+                    acc,
+                ).build()
+                status = try {
+                    call(req, parseStatus)
+                } catch (e: FalaiClientException) {
+                    if (e.code == "wrong_offset" || e.code == "hash_mismatch") {
+                        // Fora de sincronia: pergunta de novo e continua de onde o servidor diz.
+                        call(authed(Request.Builder().url("${acc.serverUrl}/api/media/${status.mediaId}/status"), acc).build(), parseStatus)
+                    } else throw e
+                }
+                _uploadProgress.value = _uploadProgress.value + (o.messageId to status.received.toFloat() / status.size)
+            }
+        }
+
+        store.markUploaded(o.messageId, status.mediaId)
+        _uploadProgress.value = _uploadProgress.value - o.messageId
+        bump()
+        val m = store.messageById(o.messageId)
+        if (m != null && _connection.value == ConnectionState.ONLINE) {
+            sendFrame(socket, SendFrame(m.id, m.conversationId, m.body, m.attachment))
+        }
+    }
+
+    /**
+     * Devolve o arquivo do anexo neste aparelho, baixando do servidor se ainda não tiver.
+     * Confere o SHA-256: o arquivo é idêntico ao original.
+     */
+    suspend fun mediaFile(att: app.falai.protocol.AttachmentDto): java.io.File = withContext(Dispatchers.IO) {
+        require(att.mediaId.isNotEmpty()) { "Anexo ainda subindo" }
+        store.localMediaPath(att.mediaId)?.let { java.io.File(it) }?.takeIf { it.exists() }?.let { return@withContext it }
+        val lock = downloadLocks.computeIfAbsent(att.mediaId) { kotlinx.coroutines.sync.Mutex() }
+        lock.lock()
+        try {
+            store.localMediaPath(att.mediaId)?.let { java.io.File(it) }?.takeIf { it.exists() }?.let { return@withContext it }
+            val acc = store.account() ?: throw FalaiClientException("not_paired", "Aparelho não pareado.")
+            mediaDir.mkdirs()
+            val ext = att.name.substringAfterLast('.', "").takeIf { it.length in 1..5 }?.let { ".$it" } ?: ""
+            val target = java.io.File(mediaDir, att.mediaId + ext)
+            val tmp = java.io.File(mediaDir, att.mediaId + ".download")
+            val req = authed(Request.Builder().url("${acc.serverUrl}/api/media/${att.mediaId}"), acc).build()
+            val resp = try {
+                http.newCall(req).execute()
+            } catch (e: IOException) {
+                throw FalaiClientException("network", "Sem conexão para baixar o arquivo.")
+            }
+            resp.use { r ->
+                if (!r.isSuccessful) throw FalaiClientException("http_${r.code}", "Não consegui baixar o arquivo (${r.code}).")
+                r.body!!.byteStream().use { input -> tmp.outputStream().use { input.copyTo(it, 256 * 1024) } }
+            }
+            if (sha256Hex(tmp) != att.sha256) {
+                tmp.delete()
+                throw FalaiClientException("hash_mismatch", "O arquivo chegou corrompido. Tente de novo.")
+            }
+            if (!tmp.renameTo(target)) throw FalaiClientException("io", "Não consegui salvar o arquivo.")
+            store.setLocalMedia(att.mediaId, target.path)
+            bump()
+            target
+        } finally {
+            lock.unlock()
+        }
+    }
+
     companion object {
+        fun sha256Hex(f: java.io.File): String {
+            val md = java.security.MessageDigest.getInstance("SHA-256")
+            f.inputStream().use { input ->
+                val buf = ByteArray(256 * 1024)
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    md.update(buf, 0, n)
+                }
+            }
+            return md.digest().joinToString("") { "%02x".format(it) }
+        }
+
         fun defaultHttp(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.SECONDS) // WebSocket: sem limite de leitura

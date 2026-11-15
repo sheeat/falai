@@ -42,7 +42,7 @@ class FalaiClientTest {
     }
 
     private suspend fun startServer(fixedPort: Int) {
-        server = FalaiServer(Store(JdbcDb(File(dir, "server.db").path)), ServerConfig(port = fixedPort), log = {})
+        server = FalaiServer(Store(JdbcDb(File(dir, "server.db").path)), ServerConfig(port = fixedPort, mediaDir = File(dir, "server-media")), log = {})
         server.start()?.let { adminCode = it }
         port = server.boundPort()
     }
@@ -57,7 +57,7 @@ class FalaiClientTest {
 
     private fun newClient(name: String): FalaiClient {
         val c = FalaiClient(
-            ClientStore(JdbcDb(File(dir, "$name.db").path)), scope,
+            ClientStore(JdbcDb(File(dir, "$name.db").path)), scope, File(dir, "$name-media"),
             reconnectDelaysMs = listOf(100, 200, 300),
         )
         clients += c
@@ -245,5 +245,97 @@ class FalaiClientTest {
     fun `endereco aceita varios formatos`() {
         assertEquals("https://falai.exemplo.com", FalaiClient.normalizeUrl(" falai.exemplo.com/ "))
         assertEquals("http://10.0.2.2:8443", FalaiClient.normalizeUrl("http://10.0.2.2:8443"))
+    }
+
+    // ---------- Arquivos (M3) ----------
+
+    private fun randomFile(name: String, size: Int, seed: Int): File =
+        File(dir, name).apply { writeBytes(kotlin.random.Random(seed).nextBytes(size)) }
+
+    @Test
+    fun `foto vai identica e so baixa quando abre`() = runBlocking {
+        val (chefe, ana, conv) = family()
+        val foto = randomFile("foto.jpg", 3 * 1024 * 1024 + 7, 1)
+
+        val m = chefe.sendMedia(conv, foto, "image", "image/jpeg", caption = "olha que lindo")
+        assertEquals(MessageStatus.PENDING, m.status)
+        assertEquals(foto.path, m.localPath)
+
+        eventually("Ana receber a mensagem com anexo") { ana.store.messages(conv).singleOrNull()?.attachment != null }
+        val recebida = ana.store.messages(conv).single()
+        val att = recebida.attachment!!
+        assertEquals("olha que lindo", recebida.body)
+        assertEquals("image", att.kind)
+        assertEquals(foto.length(), att.size)
+        assertEquals(null, recebida.localPath) // ainda não baixou
+        assertEquals("📷 Foto · olha que lindo", ana.store.conversationSummaries(ana.account.value!!.userId).single().lastBody)
+
+        val baixado = ana.mediaFile(att)
+        kotlin.test.assertContentEquals(foto.readBytes(), baixado.readBytes())
+        assertEquals(baixado.path, ana.store.messages(conv).single().localPath)
+        eventually("✓ no Chefe") { chefe.store.messages(conv).single().status == MessageStatus.SENT }
+        // Baixar de novo usa o que já está no aparelho.
+        assertEquals(baixado.path, ana.mediaFile(att).path)
+    }
+
+    @Test
+    fun `video grande sobe em pedacos mesmo com servidor fora no inicio`() = runBlocking {
+        val (chefe, ana, conv) = family()
+        val samePort = port
+        server.stop()
+        eventually("Chefe perceber a queda") { chefe.connection.value != ConnectionState.ONLINE }
+
+        val video = randomFile("video.mp4", 20 * 1024 * 1024 + 99, 2) // 3 pedaços
+        chefe.sendMedia(conv, video, "video", "video/mp4")
+        delay(500)
+        assertEquals(MessageStatus.PENDING, chefe.store.messages(conv).single().status)
+
+        startServer(samePort)
+        eventually("Ana receber o vídeo") { ana.store.messages(conv).singleOrNull()?.attachment != null }
+        val att = ana.store.messages(conv).single().attachment!!
+        assertEquals("🎥 Vídeo", ana.store.conversationSummaries(ana.account.value!!.userId).single().lastBody)
+        kotlin.test.assertContentEquals(video.readBytes(), ana.mediaFile(att).readBytes())
+    }
+
+    @Test
+    fun `audio e texto chegam na ordem em que foram escritos`() = runBlocking {
+        val (chefe, ana, conv) = family()
+        val audio = randomFile("audio.m4a", 200_000, 3)
+        chefe.sendMedia(conv, audio, "audio", "audio/mp4", durationMs = 42_000)
+        eventually("áudio chegar") { ana.store.messages(conv).isNotEmpty() }
+        chefe.send(conv, "ouviu?")
+        eventually("Ana receber os dois") { bodies(ana, conv) == listOf("", "ouviu?") }
+        assertEquals("🎤 Áudio (0:42)", ClientStore.preview("", ana.store.messages(conv).first().attachment))
+    }
+
+    @Test
+    fun `tablet novo ve o anexo antigo e consegue baixar`() = runBlocking {
+        val (chefe, ana, conv) = family()
+        val doc = randomFile("lista-churrasco.pdf", 150_000, 4)
+        ana.sendMedia(conv, doc, "file", "application/pdf")
+        eventually("enviado") { ana.store.messages(conv).single().status == MessageStatus.SENT }
+
+        val tablet = newClient("tablet")
+        tablet.pair(url, chefe.createInvite(chefe.account.value!!.userId).code, "Tablet", null)
+        online(tablet)
+        eventually("tablet ver o anexo") { tablet.store.messages(conv).singleOrNull()?.attachment != null }
+        val att = tablet.store.messages(conv).single().attachment!!
+        assertEquals("lista-churrasco.pdf", att.name)
+        kotlin.test.assertContentEquals(doc.readBytes(), tablet.mediaFile(att).readBytes())
+        assertEquals("📄 lista-churrasco.pdf", ClientStore.preview("", att))
+    }
+
+    @Test
+    fun `quem nao esta na conversa nao consegue baixar`() = runBlocking {
+        val (chefe, _, conv) = family()
+        val foto = randomFile("f.jpg", 5000, 5)
+        chefe.sendMedia(conv, foto, "image", "image/jpeg")
+        eventually("enviado") { chefe.store.messages(conv).single().status == MessageStatus.SENT }
+        val att = chefe.store.messages(conv).single().attachment!!
+
+        val bruno = newClient("bruno")
+        bruno.pair(url, chefe.createInvite().code, "Celular", "Bruno")
+        val e = assertFailsWith<FalaiClientException> { bruno.mediaFile(att) }
+        assertEquals("http_404", e.code)
     }
 }

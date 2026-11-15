@@ -39,6 +39,8 @@ data class ServerConfig(
     /** Tentativas de pareamento com código errado por IP, dentro da janela. */
     val pairMaxFailures: Int = 10,
     val pairWindowMs: Long = 10 * 60_000L,
+    /** Onde ficam fotos, vídeos, áudios e arquivos. No celular-servidor: o cartão microSD. */
+    val mediaDir: java.io.File = java.io.File("data/media"),
 )
 
 /** Limita tentativas de adivinhar códigos de convite. */
@@ -103,6 +105,7 @@ class FalaiServer(
 ) {
     val hub = Hub()
     private val limiter = FailureLimiter(config.pairMaxFailures, config.pairWindowMs, clock)
+    private val mediaFiles = MediaFiles(config.mediaDir, store, log)
     private var engine: EmbeddedServer<*, *>? = null
 
     /** Sobe o servidor. Se ainda não há ninguém cadastrado, devolve o código do administrador. */
@@ -189,6 +192,8 @@ class FalaiServer(
                     },
                 )
             }
+
+            mediaRoutes(store, mediaFiles)
 
             webSocket("/ws") { handleSocket() }
         }

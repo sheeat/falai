@@ -2,7 +2,9 @@ package app.falai.client
 
 import app.falai.db.Db
 import app.falai.db.Row
+import app.falai.protocol.AttachmentDto
 import app.falai.protocol.ConversationDto
+import app.falai.protocol.FalaiJson
 import app.falai.protocol.MessageDto
 import app.falai.protocol.UserDto
 
@@ -26,6 +28,18 @@ data class LocalMessage(
     val body: String,
     val createdAt: Long,
     val status: MessageStatus,
+    /** Anexo. Enquanto o arquivo ainda está subindo, mediaId é "". */
+    val attachment: AttachmentDto? = null,
+    /** Caminho do arquivo neste aparelho, se já existir aqui (enviado daqui ou já baixado). */
+    val localPath: String? = null,
+)
+
+/** Arquivo deste aparelho esperando para subir. */
+data class OutgoingMedia(
+    val messageId: String,
+    val path: String,
+    val mediaId: String?,
+    val attachment: AttachmentDto,
 )
 
 data class ConversationSummary(
@@ -76,6 +90,22 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
                 )
                 db.execute("CREATE INDEX messages_by_conv ON messages(conversation_id)")
                 db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '1')")
+            }
+        }
+        if (version < 2) {
+            db.transaction {
+                db.execute("ALTER TABLE messages ADD COLUMN attachment_json TEXT")
+                // Arquivos que já estão neste aparelho (baixados ou enviados daqui).
+                db.execute("CREATE TABLE local_media (media_id TEXT PRIMARY KEY, path TEXT NOT NULL)")
+                // Fila de envio de arquivos.
+                db.execute(
+                    """CREATE TABLE outgoing (
+                        message_id TEXT PRIMARY KEY,
+                        path TEXT NOT NULL,
+                        media_id TEXT,
+                        uploaded INTEGER NOT NULL DEFAULT 0)"""
+                )
+                db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '2')")
             }
         }
     }
@@ -169,7 +199,7 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
                 kind = kind,
                 displayName = name,
                 memberIds = members,
-                lastBody = shown?.string("body"),
+                lastBody = shown?.let { preview(it.string("body"), it.stringOrNull("attachment_json")?.let(::decodeAtt)) },
                 lastAuthorId = shown?.string("author_id"),
                 lastAt = shown?.long("created_at") ?: c.long("created_at"),
                 lastStatus = shown?.let { MessageStatus.valueOf(it.string("status")) },
@@ -179,15 +209,28 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
 
     // ---------- Mensagens ----------
 
-    private fun rowToMessage(r: Row) = LocalMessage(
-        id = r.string("id"),
-        seq = r.longOrNull("seq"),
-        conversationId = r.string("conversation_id"),
-        authorId = r.string("author_id"),
-        body = r.string("body"),
-        createdAt = r.long("created_at"),
-        status = MessageStatus.valueOf(r.string("status")),
-    )
+    private fun decodeAtt(json: String) = FalaiJson.decodeFromString(AttachmentDto.serializer(), json)
+    private fun encodeAtt(a: AttachmentDto?) = a?.let { FalaiJson.encodeToString(AttachmentDto.serializer(), it) }
+
+    private fun rowToMessage(r: Row): LocalMessage {
+        val att = r.stringOrNull("attachment_json")?.let(::decodeAtt)
+        val id = r.string("id")
+        val path = if (att == null) null else {
+            db.query("SELECT path FROM outgoing WHERE message_id = ?", id).firstOrNull()?.string("path")
+                ?: att.mediaId.takeIf { it.isNotEmpty() }?.let(::localMediaPath)
+        }
+        return LocalMessage(
+            id = id,
+            seq = r.longOrNull("seq"),
+            conversationId = r.string("conversation_id"),
+            authorId = r.string("author_id"),
+            body = r.string("body"),
+            createdAt = r.long("created_at"),
+            status = MessageStatus.valueOf(r.string("status")),
+            attachment = att,
+            localPath = path,
+        )
+    }
 
     /** Mensagens da conversa em ordem: confirmadas pelo servidor primeiro, depois as da fila. */
     fun messages(conversationId: String): List<LocalMessage> =
@@ -196,8 +239,65 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
             conversationId,
         ).map(::rowToMessage)
 
+    /** Mensagens prontas para mandar (as com arquivo só depois que ele terminou de subir). */
     fun pending(): List<LocalMessage> =
-        db.query("SELECT * FROM messages WHERE status = 'PENDING' ORDER BY rowid").map(::rowToMessage)
+        db.query(
+            """SELECT * FROM messages WHERE status = 'PENDING'
+               AND id NOT IN (SELECT message_id FROM outgoing WHERE uploaded = 0)
+               ORDER BY rowid"""
+        ).map(::rowToMessage)
+
+    fun insertPendingMedia(
+        id: String, conversationId: String, authorId: String, body: String,
+        attachment: AttachmentDto, path: String,
+    ): LocalMessage = db.transaction {
+        val now = clock()
+        db.execute(
+            """INSERT INTO messages (id, seq, conversation_id, author_id, body, created_at, status, attachment_json)
+               VALUES (?, NULL, ?, ?, ?, ?, 'PENDING', ?)""",
+            id, conversationId, authorId, body, now, encodeAtt(attachment.copy(mediaId = "")),
+        )
+        db.execute("INSERT INTO outgoing (message_id, path, media_id, uploaded) VALUES (?, ?, NULL, 0)", id, path)
+        messageById(id)!!
+    }
+
+    fun messageById(id: String): LocalMessage? =
+        db.query("SELECT * FROM messages WHERE id = ?", id).firstOrNull()?.let(::rowToMessage)
+
+    fun outgoingToUpload(): List<OutgoingMedia> =
+        db.query(
+            """SELECT o.*, m.attachment_json FROM outgoing o JOIN messages m ON m.id = o.message_id
+               WHERE o.uploaded = 0 AND m.status = 'PENDING' ORDER BY m.rowid"""
+        ).map {
+            OutgoingMedia(it.string("message_id"), it.string("path"), it.stringOrNull("media_id"), decodeAtt(it.string("attachment_json")))
+        }
+
+    fun setOutgoingMediaId(messageId: String, mediaId: String) {
+        db.update("UPDATE outgoing SET media_id = ? WHERE message_id = ?", mediaId, messageId)
+    }
+
+    fun resetOutgoingMediaId(messageId: String) {
+        db.update("UPDATE outgoing SET media_id = NULL WHERE message_id = ?", messageId)
+    }
+
+    /** O arquivo terminou de subir: a mensagem já pode ser enviada. */
+    fun markUploaded(messageId: String, mediaId: String) = db.transaction {
+        val m = messageById(messageId) ?: return@transaction
+        db.update(
+            "UPDATE messages SET attachment_json = ? WHERE id = ?",
+            encodeAtt(m.attachment!!.copy(mediaId = mediaId)), messageId,
+        )
+        db.update("UPDATE outgoing SET uploaded = 1, media_id = ? WHERE message_id = ?", mediaId, messageId)
+        val path = db.query("SELECT path FROM outgoing WHERE message_id = ?", messageId).first().string("path")
+        setLocalMedia(mediaId, path)
+    }
+
+    fun localMediaPath(mediaId: String): String? =
+        db.query("SELECT path FROM local_media WHERE media_id = ?", mediaId).firstOrNull()?.string("path")
+
+    fun setLocalMedia(mediaId: String, path: String) {
+        db.execute("INSERT OR REPLACE INTO local_media (media_id, path) VALUES (?, ?)", mediaId, path)
+    }
 
     fun insertPending(id: String, conversationId: String, authorId: String, body: String): LocalMessage {
         val m = LocalMessage(id, null, conversationId, authorId, body, clock(), MessageStatus.PENDING)
@@ -222,16 +322,35 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
         // Sem "ON CONFLICT ... DO UPDATE": o SQLite do Android 9 é antigo demais para isso.
         db.transaction {
             val changed = db.update(
-                "UPDATE messages SET seq = ?, created_at = ?, status = ? WHERE id = ?",
-                m.seq, m.createdAt, status.name, m.id,
+                "UPDATE messages SET seq = ?, created_at = ?, status = ?, attachment_json = ? WHERE id = ?",
+                m.seq, m.createdAt, status.name, encodeAtt(m.attachment), m.id,
             )
             if (changed == 0) {
                 db.execute(
-                    """INSERT INTO messages (id, seq, conversation_id, author_id, body, created_at, status)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    m.id, m.seq, m.conversationId, m.authorId, m.body, m.createdAt, status.name,
+                    """INSERT INTO messages (id, seq, conversation_id, author_id, body, created_at, status, attachment_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    m.id, m.seq, m.conversationId, m.authorId, m.body, m.createdAt, status.name, encodeAtt(m.attachment),
                 )
             }
+        }
+    }
+
+    companion object {
+        /** Texto curto para a lista de conversas: "📷 Foto", "🎤 Áudio (0:42)" etc. */
+        fun preview(body: String, att: AttachmentDto?): String {
+            if (att == null) return body
+            val label = when (att.kind) {
+                "image" -> "📷 Foto"
+                "video" -> "🎥 Vídeo"
+                "audio" -> "🎤 Áudio" + (att.durationMs?.let { " (${formatDuration(it)})" } ?: "")
+                else -> "📄 ${att.name}"
+            }
+            return if (body.isBlank()) label else "$label · $body"
+        }
+
+        fun formatDuration(ms: Long): String {
+            val s = ms / 1000
+            return "%d:%02d".format(s / 60, s % 60)
         }
     }
 }

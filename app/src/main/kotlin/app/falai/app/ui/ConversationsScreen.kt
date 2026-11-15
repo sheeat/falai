@@ -136,5 +136,5 @@ fun formatTime(epochMs: Long): String {
     val sameDay = now.get(java.util.Calendar.YEAR) == then.get(java.util.Calendar.YEAR) &&
         now.get(java.util.Calendar.DAY_OF_YEAR) == then.get(java.util.Calendar.DAY_OF_YEAR)
     val pattern = if (sameDay) "HH:mm" else "dd/MM"
-    return java.text.SimpleDateFormat(pattern, java.util.Locale("pt", "BR")).format(java.util.Date(epochMs))
+    return java.text.SimpleDateFormat(pattern, java.util.Locale.forLanguageTag("pt-BR")).format(java.util.Date(epochMs))
 }
