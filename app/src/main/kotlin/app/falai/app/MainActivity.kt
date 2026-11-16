@@ -1,5 +1,6 @@
 package app.falai.app
 
+import android.content.ClipboardManager
 import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
@@ -20,6 +21,7 @@ import app.falai.app.ui.FalaiTheme
 import app.falai.app.ui.InviteScreen
 import app.falai.app.ui.NewConversationScreen
 import app.falai.app.ui.PairScreen
+import app.falai.app.ui.SettingsScreen
 
 class MainActivity : ComponentActivity() {
     /** Convite que chegou por link (falai://convite?...), para preencher a tela de entrada. */
@@ -34,6 +36,22 @@ class MainActivity : ComponentActivity() {
         } else {
             pendingInvite.value = parsed
         }
+    }
+
+    /**
+     * Primeira vez que o app abre depois de instalado pela página do convite: a página guardou o
+     * link na área de transferência. Lê só se ainda não está pareado e não chegou convite por link.
+     * (O Android só deixa ler com o app em primeiro plano, por isso aqui.)
+     */
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus || pendingInvite.value != null) return
+        if ((application as FalaiApp).client.account.value != null) return
+        val text = runCatching {
+            val cm = getSystemService(ClipboardManager::class.java)
+            cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString()
+        }.getOrNull() ?: return
+        InviteLinks.parse(text)?.let { pendingInvite.value = it }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -69,7 +87,7 @@ class MainActivity : ComponentActivity() {
 /** Navegação simples entre as telas, sem biblioteca extra. */
 @Composable
 private fun Navigation(client: app.falai.client.FalaiClient) {
-    // "lista" | "nova" | "convite" | "chat:<id>"
+    // "lista" | "nova" | "convite" | "ajustes" | "chat:<id>"
     var route by rememberSaveable { mutableStateOf("lista") }
     BackHandler(enabled = route != "lista") { route = "lista" }
     when {
@@ -79,6 +97,7 @@ private fun Navigation(client: app.falai.client.FalaiClient) {
             onCreated = { route = "chat:$it" },
         )
         route == "convite" -> InviteScreen(client, onBack = { route = "lista" })
+        route == "ajustes" -> SettingsScreen(client, onBack = { route = "lista" }, onInvite = { route = "convite" })
         route.startsWith("chat:") -> ChatScreen(
             client,
             conversationId = route.removePrefix("chat:"),
@@ -89,6 +108,7 @@ private fun Navigation(client: app.falai.client.FalaiClient) {
             onOpen = { route = "chat:$it" },
             onNew = { route = "nova" },
             onInvite = { route = "convite" },
+            onSettings = { route = "ajustes" },
         )
     }
 }

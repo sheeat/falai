@@ -41,6 +41,7 @@ fun ConversationsScreen(
     onOpen: (String) -> Unit,
     onNew: () -> Unit,
     onInvite: () -> Unit,
+    onSettings: () -> Unit,
 ) {
     val changes by client.changes.collectAsState()
     val state by client.connection.collectAsState()
@@ -69,6 +70,7 @@ fun ConversationsScreen(
                     if (account?.isAdmin == true) {
                         TextButton(onClick = onInvite) { Text("Convidar", color = Color.White) }
                     }
+                    SettingsButton(onClick = onSettings)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     ConnectionBadge(state)
@@ -107,7 +109,7 @@ fun ConversationsScreen(
             } else {
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(list, key = { it.id }) { c ->
-                        ConversationRow(c, me, onClick = { onOpen(c.id) })
+                        ConversationRow(client, c, me, onClick = { onOpen(c.id) })
                         HorizontalDivider(color = FalaiColors.Divider, modifier = Modifier.padding(start = 76.dp))
                     }
                 }
@@ -124,12 +126,12 @@ fun ConversationsScreen(
 }
 
 @Composable
-private fun ConversationRow(c: ConversationSummary, me: String, onClick: () -> Unit) {
+private fun ConversationRow(client: FalaiClient, c: ConversationSummary, me: String, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Avatar(c.displayName)
+        Avatar(c.displayName, client = client, mediaId = c.avatarMediaId)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {

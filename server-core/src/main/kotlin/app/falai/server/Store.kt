@@ -123,6 +123,13 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
                 db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '3')")
             }
         }
+        if (version < 4) {
+            db.transaction {
+                // M5: foto de perfil.
+                db.execute("ALTER TABLE users ADD COLUMN avatar_media_id TEXT")
+                db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '4')")
+            }
+        }
     }
 
     // ---------- Utilidades ----------
@@ -272,7 +279,8 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
 
     fun authenticate(token: String): AuthedDevice? {
         val row = db.query(
-            """SELECT d.id AS device_id, u.id AS user_id, u.name AS name, u.is_admin AS is_admin
+            """SELECT d.id AS device_id, u.id AS user_id, u.name AS name, u.is_admin AS is_admin,
+                      u.avatar_media_id AS avatar_media_id
                FROM devices d JOIN users u ON u.id = d.user_id
                WHERE d.token_hash = ? AND d.revoked_at IS NULL""",
             sha256(token),
@@ -280,17 +288,38 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         db.update("UPDATE devices SET last_seen_at = ? WHERE id = ?", clock(), row.string("device_id"))
         return AuthedDevice(
             row.string("device_id"),
-            UserDto(row.string("user_id"), row.string("name"), row.bool("is_admin")),
+            UserDto(row.string("user_id"), row.string("name"), row.bool("is_admin"), row.stringOrNull("avatar_media_id")),
         )
     }
 
     fun userById(id: String): UserDto? =
-        db.query("SELECT id, name, is_admin FROM users WHERE id = ?", id).firstOrNull()
-            ?.let { UserDto(it.string("id"), it.string("name"), it.bool("is_admin")) }
+        db.query("SELECT id, name, is_admin, avatar_media_id FROM users WHERE id = ?", id).firstOrNull()
+            ?.let { UserDto(it.string("id"), it.string("name"), it.bool("is_admin"), it.stringOrNull("avatar_media_id")) }
 
     fun listUsers(): List<UserDto> =
-        db.query("SELECT id, name, is_admin FROM users ORDER BY name COLLATE NOCASE")
-            .map { UserDto(it.string("id"), it.string("name"), it.bool("is_admin")) }
+        db.query("SELECT id, name, is_admin, avatar_media_id FROM users ORDER BY name COLLATE NOCASE")
+            .map { UserDto(it.string("id"), it.string("name"), it.bool("is_admin"), it.stringOrNull("avatar_media_id")) }
+
+    /** Muda nome e/ou foto. [avatarMediaId] "" = tirar a foto. */
+    fun updateProfile(userId: String, name: String?, avatarMediaId: String?): UserDto = db.transaction {
+        if (name != null) {
+            val n = name.trim().take(60)
+            if (n.isEmpty()) throw FalaiException("invalid", "O nome não pode ficar vazio.")
+            db.update("UPDATE users SET name = ? WHERE id = ?", n, userId)
+        }
+        if (avatarMediaId != null) {
+            if (avatarMediaId.isEmpty()) {
+                db.update("UPDATE users SET avatar_media_id = NULL WHERE id = ?", userId)
+            } else {
+                val m = media(avatarMediaId) ?: throw FalaiException("invalid", "Foto não encontrada.")
+                if (!m.complete) throw FalaiException("invalid", "A foto ainda não terminou de subir.")
+                if (m.uploaderId != userId) throw FalaiException("forbidden", "Foto de outra pessoa.")
+                if (!m.mime.startsWith("image/")) throw FalaiException("invalid", "A foto de perfil precisa ser uma imagem.")
+                db.update("UPDATE users SET avatar_media_id = ? WHERE id = ?", avatarMediaId, userId)
+            }
+        }
+        userById(userId) ?: throw FalaiException("not_found", "Pessoa não encontrada.")
+    }
 
     // ---------- Conversas ----------
 
@@ -373,7 +402,10 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         val att = frame.attachment?.let { a ->
             val m = media(a.mediaId) ?: throw FalaiException("invalid", "Anexo não encontrado.")
             if (!m.complete) throw FalaiException("invalid", "O anexo ainda não terminou de subir.")
-            if (m.uploaderId != device.user.id) throw FalaiException("forbidden", "Anexo de outra pessoa.")
+            // Encaminhar: pode usar um arquivo que a pessoa já consegue ver (sem subir de novo).
+            if (m.uploaderId != device.user.id && !canDownload(m.id, device.user.id)) {
+                throw FalaiException("forbidden", "Anexo de outra pessoa.")
+            }
             if (!a.kind.matches(Regex("image|video|audio|file"))) throw FalaiException("invalid", "Tipo de anexo inválido.")
             // Os dados confiáveis vêm do servidor; do cliente só o tipo, a duração e a miniatura.
             a.copy(mime = m.mime, name = m.name, size = m.size, sha256 = m.sha256, thumb = sanitizeThumb(a.thumb))
@@ -458,9 +490,14 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
     }
 
     /** Quem pode baixar: quem enviou, ou quem participa de uma conversa onde o anexo apareceu. */
+    fun isAvatar(mediaId: String): Boolean =
+        db.query("SELECT 1 AS x FROM users WHERE avatar_media_id = ? LIMIT 1", mediaId).isNotEmpty()
+
     fun canDownload(mediaId: String, userId: String): Boolean {
         val m = media(mediaId) ?: return false
         if (m.uploaderId == userId) return true
+        // Foto de perfil: todo mundo da família pode ver.
+        if (isAvatar(mediaId)) return true
         return db.query(
             """SELECT 1 AS x FROM messages msg
                JOIN members mb ON mb.conversation_id = msg.conversation_id AND mb.user_id = ?

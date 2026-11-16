@@ -69,6 +69,8 @@ class FailureLimiter(private val max: Int, private val windowMs: Long, private v
 class Hub {
     class Conn(val device: AuthedDevice) {
         val outbox = Channel<ServerFrame>(capacity = 1000)
+        /** Nome atual da pessoa (muda se ela trocar o nome com o aparelho conectado). */
+        @Volatile var name: String = device.user.name
     }
 
     private val byUser = ConcurrentHashMap<String, MutableSet<Conn>>()
@@ -94,6 +96,14 @@ class Hub {
         }
     }
 
+    /** Para todos os aparelhos conectados (ex.: alguém mudou a foto). */
+    fun deliverAll(frame: ServerFrame, exceptDeviceId: String? = null) = deliver(byUser.keys.toList(), frame, exceptDeviceId)
+
+    /** A pessoa trocou o nome: atualiza as conexões abertas dela (tela do servidor). */
+    fun rename(userId: String, name: String) {
+        byUser[userId]?.forEach { it.name = name }
+    }
+
     fun onlineDevices(userId: String): Int = byUser[userId]?.size ?: 0
 
     /** Total de aparelhos conectados agora (para a tela do servidor). */
@@ -101,7 +111,7 @@ class Hub {
 
     /** Quem está conectado agora, ex.: "Ana (1a2b3c4d)". */
     fun connectedNames(): List<String> =
-        byUser.values.flatten().map { "${it.device.user.name} (${it.device.deviceId.take(8)})" }.sorted()
+        byUser.values.flatten().map { "${it.name} (${it.device.deviceId.take(8)})" }.sorted()
 }
 
 class FalaiServer(
@@ -276,18 +286,18 @@ class FalaiServer(
                 try {
                     handleFrame(conn, parsed, ::reply)
                 } catch (e: FalaiException) {
-                    log("Recusado (${device.user.name}): ${e.code} ${e.message}")
+                    log("Recusado (${conn.name}): ${e.code} ${e.message}")
                     reply(ErrorFrame(e.code, e.message ?: "", requestIdOf(parsed)))
                 } catch (e: Exception) {
                     // Erro inesperado: avisa o aparelho e segue com a conexão aberta.
-                    log("Erro inesperado (${device.user.name}): $e")
+                    log("Erro inesperado (${conn.name}): $e")
                     reply(ErrorFrame("server_error", "Erro no servidor: ${e.message ?: e.javaClass.simpleName}", requestIdOf(parsed)))
                 }
             }
         } finally {
             hub.remove(conn)
             writer.cancel()
-            log("Desconectado: ${device.user.name} (${device.deviceId.take(8)})")
+            log("Desconectado: ${conn.name} (${device.deviceId.take(8)})")
         }
     }
 
@@ -298,6 +308,7 @@ class FalaiServer(
         is CreateInviteFrame -> f.requestId
         is PingFrame -> f.requestId
         is SetPublicAddressFrame -> f.requestId
+        is UpdateProfileFrame -> f.requestId
         is SyncFrame -> null
     }
 
@@ -305,6 +316,15 @@ class FalaiServer(
         val device = conn.device
         when (f) {
             is PingFrame -> reply(PongFrame(f.requestId))
+
+            is UpdateProfileFrame -> {
+                val u = store.updateProfile(device.user.id, f.name, f.avatarMediaId)
+                hub.rename(u.id, u.name)
+                log("Perfil atualizado: ${u.name}")
+                reply(UserUpdatedFrame(f.requestId, u))
+                // Todos os outros aparelhos (da família toda) veem o nome/foto novos.
+                hub.deliverAll(UserUpdatedFrame(null, u), exceptDeviceId = device.deviceId)
+            }
 
             is SetPublicAddressFrame -> {
                 if (!device.user.isAdmin) throw FalaiException("forbidden", "Só o administrador muda o endereço.")
@@ -345,7 +365,7 @@ class FalaiServer(
 
             is CreateInviteFrame -> {
                 val (code, expires) = store.createInvite(device.user, f.forUserId)
-                log("Convite criado por ${device.user.name}")
+                log("Convite criado por ${conn.name}")
                 reply(InviteFrame(f.requestId, code, expires, invites.linkFor(code)))
             }
         }

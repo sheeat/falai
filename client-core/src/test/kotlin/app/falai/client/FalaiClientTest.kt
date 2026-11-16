@@ -17,6 +17,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
@@ -532,5 +533,91 @@ class FalaiClientTest {
         ana.reconnectNow(force = true)
         eventually("Ana saber o endereço") { ana.publicBase.value == "https://falai.falaifamilia.net" }
         assertEquals("https://falai.falaifamilia.net/convite/", chefe.createInvite().link!!.substringBeforeLast('/') + "/")
+    }
+
+    @Test
+    fun `perfil - trocar nome e foto e a familia ve na hora`() = runBlocking {
+        val (chefe, ana, conv) = family()
+        val chefeId = chefe.account.value!!.userId
+        val foto = randomFile("eu.jpg", 40_000, 31)
+        val u = chefe.updateProfile(name = "  Edson  ", photo = foto)
+        assertEquals("Edson", u.name)
+        // A tela do servidor mostra o nome novo de quem está conectado.
+        assertTrue(server.hub.connectedNames().any { it.startsWith("Edson (") }, "${server.hub.connectedNames()}")
+        val avatar = assertNotNull(u.avatarMediaId)
+        // Ana recebe a mudança sem precisar reconectar.
+        eventually("Ana ver o nome novo") { ana.store.userName(chefeId) == "Edson" }
+        eventually("Ana ver a foto") { ana.store.user(chefeId)?.avatarMediaId == avatar }
+        assertEquals(avatar, ana.store.conversationSummaries(ana.account.value!!.userId).first { it.id == conv }.avatarMediaId)
+        // E consegue baixar a foto, idêntica.
+        kotlin.test.assertContentEquals(foto.readBytes(), ana.avatarFile(avatar).readBytes())
+        // Nome vazio não pode.
+        val vazio = runCatching { chefe.updateProfile(name = "   ") }.exceptionOrNull()
+        assertTrue(vazio is FalaiClientException && vazio.code == "invalid", "$vazio")
+        // Tirar a foto.
+        assertEquals(null, chefe.updateProfile(removePhoto = true).avatarMediaId)
+        eventually("Ana ver sem foto") { ana.store.user(chefeId)?.avatarMediaId == null }
+        // Outro aparelho que entra depois já vê o nome certo.
+        assertEquals("Edson", chefe.store.userName(chefeId))
+    }
+
+    @Test
+    fun `perfil - quem entra depois da foto tambem ve a foto`() = runBlocking {
+        val chefe = newClient("chefe")
+        chefe.pair(url, adminCode, "Celular do Chefe", "Chefe")
+        online(chefe)
+        val chefeId = chefe.account.value!!.userId
+        val foto = randomFile("eu.jpg", 4_000, 7)
+        val avatar = assertNotNull(chefe.updateProfile(photo = foto).avatarMediaId)
+        // Uma pessoa nova entra depois da foto e o chefe começa a conversa.
+        val code = chefe.createInvite().code
+        val novo = newClient("novo")
+        novo.pair(url, code, "Celular novo", "Edson 1")
+        online(novo)
+        val novoId = novo.account.value!!.userId
+        val conv = chefe.createConversation("direct", null, listOf(novoId))
+        eventually("novo ver a conversa") { novo.store.conversationSummaries(novoId).isNotEmpty() }
+        assertEquals(avatar, novo.store.user(chefeId)?.avatarMediaId)
+        assertEquals(avatar, novo.store.conversationSummaries(novoId).first { it.id == conv.id }.avatarMediaId)
+        kotlin.test.assertContentEquals(foto.readBytes(), novo.avatarFile(avatar).readBytes())
+        // E a conversa começada pelo novo também.
+        val conv2 = novo.createConversation("direct", null, listOf(chefeId))
+        assertEquals(avatar, novo.store.conversationSummaries(novoId).first { it.id == conv2.id }.avatarMediaId)
+    }
+
+    @Test
+    fun `encaminhar foto recebida para outra conversa sem subir de novo`() = runBlocking {
+        val (chefe, ana, conv) = family()
+        val anaId = ana.account.value!!.userId
+        val chefeId = chefe.account.value!!.userId
+        // A Ana manda uma foto para o chefe.
+        val foto = randomFile("praia.jpg", 300_000, 5)
+        ana.sendMedia(conv, foto, "image", "image/jpeg", "praia.jpg")
+        eventually("chefe receber a foto") { chefe.store.messages(conv).any { it.attachment?.mediaId?.isNotEmpty() == true } }
+        val recebida = chefe.store.messages(conv).first { it.attachment != null }
+        // Um terceiro, o Beto, entra na família.
+        val beto = newClient("beto")
+        beto.pair(url, chefe.createInvite().code, "Celular do Beto", "Beto")
+        online(beto)
+        val betoId = beto.account.value!!.userId
+        val conv2 = chefe.createConversation("direct", null, listOf(betoId)).id
+        // O chefe encaminha a foto da Ana para o Beto.
+        val fwd = chefe.forward(conv2, recebida)
+        assertEquals(recebida.attachment!!.mediaId, fwd.attachment!!.mediaId)
+        eventually("encaminhada confirmada") { chefe.store.messageById(fwd.id)?.status == MessageStatus.SENT }
+        eventually("Beto receber") { beto.store.messages(conv2).any { it.attachment != null } }
+        val noBeto = beto.store.messages(conv2).first { it.attachment != null }
+        assertEquals(chefeId, noBeto.authorId)
+        kotlin.test.assertContentEquals(foto.readBytes(), beto.mediaFile(noBeto.attachment!!).readBytes())
+        // Texto também encaminha.
+        chefe.forward(conv2, chefe.send(conv, "oi Ana"))
+        eventually("Beto receber o texto") { bodies(beto, conv2).contains("oi Ana") }
+        // Quem não consegue ver o arquivo não pode encaminhar (Beto não está na conversa da Ana).
+        ana.sendMedia(conv, randomFile("segredo.jpg", 2_000, 9), "image", "image/jpeg", "segredo.jpg")
+        eventually("chefe receber a segunda foto") { chefe.store.messages(conv).count { it.attachment?.mediaId?.isNotEmpty() == true } == 2 }
+        val falso = chefe.store.messages(conv).last { it.attachment != null }
+        val conv3 = beto.createConversation("direct", null, listOf(anaId)).id
+        val m = beto.forward(conv3, falso)
+        eventually("servidor recusar") { beto.store.messageById(m.id)?.status == MessageStatus.FAILED }
     }
 }

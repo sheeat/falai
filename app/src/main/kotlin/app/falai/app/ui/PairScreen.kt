@@ -1,6 +1,8 @@
 package app.falai.app.ui
 
+import android.content.ClipboardManager
 import android.os.Build
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -66,7 +68,7 @@ fun PairScreen(client: FalaiClient, invite: InviteLinks.Parsed? = null) {
         if (invite != null) {
             Text(
                 if (forExistingUser) "Convite para ligar mais um aparelho seu. É só tocar em Entrar."
-                else "Você foi convidado! 🎉\nDigite o seu nome e toque em Entrar.",
+                else "Bem-vindo! 👋\nComo você quer ser chamado na família?",
                 fontSize = 18.sp,
             )
         } else {
@@ -156,6 +158,22 @@ fun PairScreen(client: FalaiClient, invite: InviteLinks.Parsed? = null) {
         }
 
         if (invite == null) {
+            // Copiou o link do convite? Um toque e preenche tudo.
+            val context = LocalContext.current
+            TextButton(onClick = {
+                val text = runCatching {
+                    context.getSystemService(ClipboardManager::class.java)
+                        .primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
+                }.getOrNull()
+                val parsed = text?.let { InviteLinks.parse(it) }
+                if (parsed != null) {
+                    server = parsed.server
+                    code = parsed.code
+                    error = null
+                } else {
+                    error = "Não achei um link de convite copiado. Abra o link que você recebeu."
+                }
+            }) { Text("📋 Colar o link do convite") }
             Column(horizontalAlignment = Alignment.Start) {
                 Text(
                     "Testando em casa? No emulador use http://10.0.2.2:8443 e no próprio celular-servidor use http://127.0.0.1:8443.",

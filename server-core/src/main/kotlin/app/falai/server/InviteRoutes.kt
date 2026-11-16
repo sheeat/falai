@@ -109,15 +109,16 @@ internal fun invitePage(
             <h1>$who para o Falaí 💬</h1>
             <p class="sub">O mensageiro da família.</p>
             ${if (preview.forUserName != null) "<p>Este convite liga <b>mais um aparelho</b> de ${esc(preview.forUserName)}.</p>" else ""}
-            <div class="step" id="baixar"><span class="n">1</span><div>
-              <b>Instale o app</b> (se ainda não tem)<br>
-              ${if (apk != null) """<a class="btn outline" href="/app/falai.apk">Baixar o Falaí (${sizeLabel(apk.size)})</a>
-              <p class="small">Abra o arquivo baixado e toque em Instalar. O Android vai pedir para <b>permitir instalar apps desta fonte</b>: pode permitir, o app foi feito pela família e por isso não está na Play Store.</p>"""
-              else "Peça o arquivo do app para quem te convidou e instale."}
-            </div></div>
-            <div class="step"><span class="n">2</span><div>
-              <b>Entre na conversa</b><br>Com o app instalado, volte aqui e toque no botão. Depois é só digitar o seu nome.
-              <a class="btn" href="${esc(intentUri)}">Abrir o convite no Falaí</a>
+            ${if (apk != null) """<div class="step" id="baixar"><div>
+              <b>Ainda não tem o Falaí?</b>
+              <a class="btn" href="/app/falai.apk" onclick="guardarConvite()">Baixar e instalar o Falaí (${sizeLabel(apk.size)})</a>
+              <p class="small">Toque em <b>Instalar</b> e depois em <b>Abrir</b>. O Falaí já abre com o seu convite: é só escolher o seu nome.</p>
+              <p class="small">Se o Android pedir, <b>permita instalar apps desta fonte</b>. O app foi feito pela família, por isso não está na Play Store.</p>
+            </div></div>"""
+            else """<div class="step" id="baixar"><div><b>Ainda não tem o Falaí?</b><br>Peça o arquivo do app para quem te convidou, instale e volte aqui.</div></div>"""}
+            <div class="step"><div>
+              <b>Já tem o Falaí?</b>
+              <a class="btn ${if (apk != null) "outline" else ""}" href="${esc(intentUri)}">Abrir o convite no Falaí</a>
               <a class="small" href="${esc(appUri)}">Não abriu? Toque aqui</a>
             </div></div>
             <p class="code">Código: <b>${esc(code.chunked(5).joinToString(" "))}</b><br>Vale por 7 dias e é só seu: depois de usado, não serve para mais ninguém.</p>
@@ -139,12 +140,16 @@ internal fun invitePage(
  .sub{margin:0 0 20px;color:#6E625C}
  .step{display:flex;gap:12px;background:#fff;border-radius:14px;padding:16px;margin:12px 0;box-shadow:0 1px 3px rgba(0,0,0,.08)}
  .n{flex:none;width:28px;height:28px;border-radius:50%;background:#C8553D;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700}
- .btn{display:block;margin:12px 0 6px;padding:14px;border-radius:12px;background:#C8553D;color:#fff;text-align:center;text-decoration:none;font-weight:600;font-size:17px}
+ .btn{display:block;box-sizing:border-box;width:100%;margin:12px 0 6px;padding:14px;border-radius:12px;background:#C8553D;color:#fff;text-align:center;text-decoration:none;font-weight:600;font-size:17px}
  .btn.outline{background:#fff;color:#C8553D;border:2px solid #C8553D}
  .small{display:block;font-size:13px;color:#6E625C}
  .code{margin-top:22px;font-size:14px;color:#6E625C;text-align:center}
 </style></head>
-<body><main>$body</main></body></html>"""
+<body><main>$body</main>
+<script>
+// Guarda o link do convite na área de transferência: ao abrir pela primeira vez, o app encontra o convite sozinho.
+function guardarConvite(){try{navigator.clipboard.writeText(location.origin+location.pathname)}catch(e){}}
+</script></body></html>"""
 }
 
 /**
