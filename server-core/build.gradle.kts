@@ -23,12 +23,16 @@ dependencies {
     api("io.ktor:ktor-server-core:$ktorVersion")
     api("io.ktor:ktor-server-cio:$ktorVersion")
     api("io.ktor:ktor-server-websockets:$ktorVersion")
+    // Vídeo no navegador: deixa pular para o meio (pedidos "Range").
+    implementation("io.ktor:ktor-server-partial-content:$ktorVersion")
     api("org.jetbrains.kotlinx:kotlinx-serialization-json:1.13.0")
     api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
 
     // SQLite via JDBC: usado para rodar o servidor no PC e nos testes.
     // No Android, o banco nativo do sistema é usado (ver server-android).
     implementation("org.xerial:sqlite-jdbc:3.54.1.0")
+    // Gera o QR Code da página "Falaí no computador".
+    implementation("com.google.zxing:core:3.5.3")
     runtimeOnly("org.slf4j:slf4j-simple:2.0.17")
 
     testImplementation(kotlin("test"))

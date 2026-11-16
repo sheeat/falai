@@ -216,6 +216,10 @@ data class SetPublicAddressFrame(val requestId: String, val address: String) : C
 
 // ---------- Servidor -> cliente ----------
 
+/** O celular aprova o navegador que mostrou o QR Code (Falaí no computador). */
+@Serializable @SerialName("approve_web")
+data class ApproveWebFrame(val requestId: String, val code: String) : ClientFrame
+
 @Serializable
 sealed interface ServerFrame
 
@@ -270,3 +274,23 @@ data class PongFrame(val requestId: String) : ServerFrame
 
 @Serializable @SerialName("error")
 data class ErrorFrame(val code: String, val message: String, val requestId: String? = null) : ServerFrame
+
+@Serializable @SerialName("web_approved")
+data class WebApprovedFrame(val requestId: String, val deviceName: String) : ServerFrame
+
+/** Falaí no computador: o QR Code leva "falai://web?c=CODIGO"; o código também pode ser digitado. */
+object WebLinkCodes {
+    const val ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+    fun qrText(code: String) = "falai://web?c=$code"
+
+    /** Aceita o texto lido do QR Code ou o código digitado ("abcd 2345", "ABCD-2345"...). */
+    fun parse(input: String): String? {
+        val t = input.trim()
+        val raw = if (t.startsWith("falai://web", ignoreCase = true)) {
+            t.substringAfter("c=", "").substringBefore('&')
+        } else t
+        val code = raw.uppercase().filter { it.isLetterOrDigit() }
+        return code.takeIf { it.length == 8 && it.all { c -> c in ALPHABET } }
+    }
+}

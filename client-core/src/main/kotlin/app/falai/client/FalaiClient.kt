@@ -355,6 +355,7 @@ class FalaiClient(
             }
             is InviteFrame -> pendingRequests.remove(f.requestId)?.complete(f)
             is PongFrame -> pendingRequests.remove(f.requestId)?.complete(f)
+            is app.falai.protocol.WebApprovedFrame -> pendingRequests.remove(f.requestId)?.complete(f)
             is UserUpdatedFrame -> {
                 store.upsertUser(f.user)
                 bump()
@@ -641,6 +642,20 @@ class FalaiClient(
         } finally {
             lock.unlock()
         }
+    }
+
+    // ---------- Falaí no computador ----------
+
+    /**
+     * Liga o navegador que está mostrando o QR Code. [qrOrCode] = o texto lido do QR Code
+     * ou o código digitado. Devolve o nome do navegador (ex.: "Chrome no Windows").
+     */
+    suspend fun approveWeb(qrOrCode: String): String {
+        val code = app.falai.protocol.WebLinkCodes.parse(qrOrCode)
+            ?: throw FalaiClientException("invalid", "Esse não é o código do Falaí no computador. Confira e tente de novo.")
+        val id = UUID.randomUUID().toString()
+        val f = request(id, app.falai.protocol.ApproveWebFrame(id, code)) as app.falai.protocol.WebApprovedFrame
+        return f.deviceName
     }
 
     // ---------- Perfil ----------

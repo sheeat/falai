@@ -2,7 +2,7 @@
 
 Mensageiro da família. Um celular antigo fica em casa como servidor, e os celulares e tablets da família se conectam a ele pela internet através do Cloudflare Tunnel.
 
-## Estado atual: M5 (mais simples, com perfil e visualizador)
+## Estado atual: M6 (Falaí no computador)
 
 | Parte | O que faz | Testado |
 |---|---|---|
@@ -25,7 +25,9 @@ Mensageiro da família. Um celular antigo fica em casa como servidor, e os celul
 - Seta de voltar maior e mais grossa.
 - **Salvar, encaminhar e compartilhar:** segurando o dedo numa mensagem (ou no ⋮ / *Salvar* da tela cheia). *Salvar* põe uma cópia na galeria (pasta Falaí). *Encaminhar* manda para outra conversa sem subir o arquivo de novo. *Compartilhar* manda para outros apps (WhatsApp, e-mail…).
 
-Ainda não tem: versão no navegador com QR Code (próximo passo, M6), notificações com o app fechado (FCM), editor de fotos/vídeo, chamadas, criptografia no app.
+**No computador (M6):** abra `https://falai.SEUDOMINIO/web` no navegador. A página mostra um QR Code. No celular, vá em *Configurações → Falaí no computador → Ler o QR Code* (ou digite o código de 8 letras). As conversas aparecem no navegador: ler, escrever, ver e mandar fotos, vídeos, áudios e arquivos (até 1 GB; arraste e solte ou Ctrl+V), salvar, avisos do navegador. O navegador vira um "aparelho" da pessoa: a chave fica num cookie protegido (o JavaScript da página não lê, e outros sites não usam). *Sair* desliga o computador.
+
+Ainda não tem: notificações com o app fechado (FCM), editor de fotos/vídeo, chamadas, criptografia no app.
 
 ## Rodar os testes (PC)
 

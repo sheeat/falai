@@ -12,8 +12,8 @@ android {
         applicationId = "app.falai"
         minSdk = 28
         targetSdk = 36
-        versionCode = 11
-        versionName = "0.5.3"
+        versionCode = 12
+        versionName = "0.6.0"
     }
 
     buildTypes {
@@ -60,4 +60,6 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.0")
+    // Leitor de QR Code (Falaí no computador).
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 }
