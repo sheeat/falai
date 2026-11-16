@@ -584,4 +584,40 @@ class FalaiClientTest {
         val conv2 = novo.createConversation("direct", null, listOf(chefeId))
         assertEquals(avatar, novo.store.conversationSummaries(novoId).first { it.id == conv2.id }.avatarMediaId)
     }
+
+    @Test
+    fun `encaminhar foto recebida para outra conversa sem subir de novo`() = runBlocking {
+        val (chefe, ana, conv) = family()
+        val anaId = ana.account.value!!.userId
+        val chefeId = chefe.account.value!!.userId
+        // A Ana manda uma foto para o chefe.
+        val foto = randomFile("praia.jpg", 300_000, 5)
+        ana.sendMedia(conv, foto, "image", "image/jpeg", "praia.jpg")
+        eventually("chefe receber a foto") { chefe.store.messages(conv).any { it.attachment?.mediaId?.isNotEmpty() == true } }
+        val recebida = chefe.store.messages(conv).first { it.attachment != null }
+        // Um terceiro, o Beto, entra na família.
+        val beto = newClient("beto")
+        beto.pair(url, chefe.createInvite().code, "Celular do Beto", "Beto")
+        online(beto)
+        val betoId = beto.account.value!!.userId
+        val conv2 = chefe.createConversation("direct", null, listOf(betoId)).id
+        // O chefe encaminha a foto da Ana para o Beto.
+        val fwd = chefe.forward(conv2, recebida)
+        assertEquals(recebida.attachment!!.mediaId, fwd.attachment!!.mediaId)
+        eventually("encaminhada confirmada") { chefe.store.messageById(fwd.id)?.status == MessageStatus.SENT }
+        eventually("Beto receber") { beto.store.messages(conv2).any { it.attachment != null } }
+        val noBeto = beto.store.messages(conv2).first { it.attachment != null }
+        assertEquals(chefeId, noBeto.authorId)
+        kotlin.test.assertContentEquals(foto.readBytes(), beto.mediaFile(noBeto.attachment!!).readBytes())
+        // Texto também encaminha.
+        chefe.forward(conv2, chefe.send(conv, "oi Ana"))
+        eventually("Beto receber o texto") { bodies(beto, conv2).contains("oi Ana") }
+        // Quem não consegue ver o arquivo não pode encaminhar (Beto não está na conversa da Ana).
+        ana.sendMedia(conv, randomFile("segredo.jpg", 2_000, 9), "image", "image/jpeg", "segredo.jpg")
+        eventually("chefe receber a segunda foto") { chefe.store.messages(conv).count { it.attachment?.mediaId?.isNotEmpty() == true } == 2 }
+        val falso = chefe.store.messages(conv).last { it.attachment != null }
+        val conv3 = beto.createConversation("direct", null, listOf(anaId)).id
+        val m = beto.forward(conv3, falso)
+        eventually("servidor recusar") { beto.store.messageById(m.id)?.status == MessageStatus.FAILED }
+    }
 }

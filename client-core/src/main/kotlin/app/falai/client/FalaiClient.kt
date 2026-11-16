@@ -392,6 +392,21 @@ class FalaiClient(
         return m
     }
 
+    /**
+     * Encaminha uma mensagem para outra conversa. Com arquivo, usa o que já está no servidor:
+     * não sobe de novo (rápido e não gasta internet).
+     */
+    fun forward(conversationId: String, original: LocalMessage): LocalMessage {
+        val att = original.attachment
+        if (att == null) return send(conversationId, original.body)
+        val acc = store.account() ?: throw FalaiClientException("not_paired", "Aparelho não pareado.")
+        if (att.mediaId.isEmpty()) throw FalaiClientException("uploading", "Espere o arquivo terminar de subir.")
+        val m = store.insertPendingForward(UUID.randomUUID().toString(), conversationId, acc.userId, "", att)
+        bump()
+        if (_connection.value == ConnectionState.ONLINE) sendFrame(socket, SendFrame(m.id, m.conversationId, m.body, m.attachment))
+        return m
+    }
+
     private suspend fun request(requestId: String, frame: ClientFrame): ServerFrame {
         if (_connection.value != ConnectionState.ONLINE) {
             throw FalaiClientException("offline", "Sem conexão com o servidor. Tente de novo em instantes.")

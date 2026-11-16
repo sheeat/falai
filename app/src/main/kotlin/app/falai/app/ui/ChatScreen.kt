@@ -11,6 +11,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -170,10 +171,80 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
     }
 
     // Foto ou vídeo aberto em tela cheia (dentro do app).
-    var viewing by remember { mutableStateOf<Pair<File, AttachmentDto>?>(null) }
+    var viewing by remember { mutableStateOf<Pair<File, LocalMessage>?>(null) }
+
+    // ---------- Salvar, encaminhar, compartilhar ----------
+
+    var actionsFor by remember { mutableStateOf<LocalMessage?>(null) }  // menu de quem segurou a mensagem
+    var forwardFor by remember { mutableStateOf<LocalMessage?>(null) }  // escolhendo para onde encaminhar
+    var saveAfterPermission by remember { mutableStateOf<LocalMessage?>(null) }
+
+    /** Garante o arquivo no aparelho (baixa se precisar) e depois faz [then]. */
+    fun withFile(m: LocalMessage, then: (File) -> Unit) {
+        val att = m.attachment ?: return
+        scope.launch {
+            val f = m.localPath?.let(::File)?.takeIf { it.exists() } ?: try {
+                if (att.size > AUTO_DOWNLOAD_BYTES) Toast.makeText(context, "Baixando…", Toast.LENGTH_SHORT).show()
+                client.mediaFile(att)
+            } catch (e: Exception) {
+                Toast.makeText(context, e.message ?: "Não consegui baixar.", Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            then(f)
+        }
+    }
+
+    fun saveNow(m: LocalMessage) {
+        val att = m.attachment ?: return
+        withFile(m) { f ->
+            scope.launch {
+                val msg = try {
+                    val where = withContext(Dispatchers.IO) { saveToDevice(context, f, att.name, att.mime) }
+                    "Salvo no celular, em $where ✔"
+                } catch (e: Exception) {
+                    "Não consegui salvar: ${e.message ?: "erro"}"
+                }
+                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    val askStorage = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val m = saveAfterPermission
+        saveAfterPermission = null
+        if (granted && m != null) saveNow(m)
+        else if (!granted) Toast.makeText(context, "Sem a permissão não dá para salvar no celular.", Toast.LENGTH_LONG).show()
+    }
+
+    fun save(m: LocalMessage) {
+        val granted = !needsStoragePermission() || ContextCompat.checkSelfPermission(
+            context, Manifest.permission.WRITE_EXTERNAL_STORAGE,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) saveNow(m) else {
+            saveAfterPermission = m
+            askStorage.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+    }
+
+    fun share(m: LocalMessage) {
+        val att = m.attachment
+        if (att == null) shareText(context, m.body) else withFile(m) { f -> shareFile(context, f, att.mime) }
+    }
+
+    fun forwardTo(m: LocalMessage, target: app.falai.client.ConversationSummary) {
+        try {
+            client.forward(target.id, m)
+            Toast.makeText(context, "Encaminhado para ${target.displayName} ✔", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(context, e.message ?: "Não consegui encaminhar.", Toast.LENGTH_LONG).show()
+        }
+    }
 
     Box(Modifier.fillMaxSize()) {
-    CompositionLocalProvider(LocalOpenMedia provides { f, a -> viewing = f to a }) {
+    CompositionLocalProvider(
+        LocalOpenMedia provides { f, m -> viewing = f to m },
+        LocalMessageLongPress provides { m -> actionsFor = m },
+    ) {
     Column(Modifier.fillMaxSize().background(FalaiColors.ChatBg).imePadding()) {
         Row(
             Modifier.fillMaxWidth().background(FalaiColors.Primary).statusBarsPadding()
@@ -297,21 +368,56 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
         }
     }
     }
-    viewing?.let { (f, a) -> MediaViewer(f, a, onClose = { viewing = null }) }
+    viewing?.let { (f, m) ->
+        MediaViewer(
+            f, m.attachment!!, onClose = { viewing = null },
+            onSave = { save(m) },
+            onForward = { forwardFor = m },
+            onShare = { share(m) },
+        )
+    }
+    actionsFor?.let { m ->
+        MessageActionsDialog(
+            m,
+            onDismiss = { actionsFor = null },
+            onSave = { actionsFor = null; save(m) },
+            onForward = { actionsFor = null; forwardFor = m },
+            onShare = { actionsFor = null; share(m) },
+            onCopy = {
+                actionsFor = null
+                val cm = context.getSystemService(android.content.ClipboardManager::class.java)
+                cm?.setPrimaryClip(android.content.ClipData.newPlainText("Falaí", m.body))
+                Toast.makeText(context, "Texto copiado", Toast.LENGTH_SHORT).show()
+            },
+        )
+    }
+    forwardFor?.let { m ->
+        ForwardDialog(
+            client, me,
+            onDismiss = { forwardFor = null },
+            onPick = { target -> forwardFor = null; forwardTo(m, target) },
+        )
+    }
     }
 }
 
 /** Abre foto/vídeo em tela cheia; quem fornece é a tela da conversa. */
-private val LocalOpenMedia = staticCompositionLocalOf<(File, AttachmentDto) -> Unit> { { _, _ -> } }
+private val LocalOpenMedia = staticCompositionLocalOf<(File, LocalMessage) -> Unit> { { _, _ -> } }
 
+/** Segurar o dedo numa mensagem abre o menu (salvar, encaminhar, compartilhar). */
+private val LocalMessageLongPress = staticCompositionLocalOf<(LocalMessage) -> Unit> { { } }
+
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun Bubble(client: FalaiClient, m: LocalMessage, mine: Boolean, authorName: String?, uploadProgress: Float?) {
+    val longPress = LocalMessageLongPress.current
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start) {
         Column(
             Modifier
                 .widthIn(max = 300.dp)
                 .clip(RoundedCornerShape(12.dp))
                 .background(if (mine) FalaiColors.BubbleOut else FalaiColors.BubbleIn)
+                .combinedClickable(onClick = {}, onLongClick = { longPress(m) })
                 .padding(horizontal = 8.dp, vertical = 6.dp)
         ) {
             if (!mine && authorName != null) {
@@ -338,14 +444,16 @@ private fun Bubble(client: FalaiClient, m: LocalMessage, mine: Boolean, authorNa
 }
 
 /** Mostra o anexo: baixa quando precisa e confere que chegou idêntico. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun AttachmentView(client: FalaiClient, m: LocalMessage) {
     val att = m.attachment ?: return
     val context = LocalContext.current
     val openMedia = LocalOpenMedia.current
+    val longPress = LocalMessageLongPress.current
     // Foto e vídeo abrem aqui dentro; os outros arquivos, no app do celular que sabe abrir.
     fun open(f: File) {
-        if (att.kind == "image" || att.kind == "video") openMedia(f, att) else openExternally(context, f, att.mime)
+        if (att.kind == "image" || att.kind == "video") openMedia(f, m) else openExternally(context, f, att.mime)
     }
     val scope = rememberCoroutineScope()
     var file by remember(m.id, m.localPath) { mutableStateOf(m.localPath?.let(::File)?.takeIf { it.exists() }) }
@@ -395,7 +503,7 @@ private fun AttachmentView(client: FalaiClient, m: LocalMessage) {
                     .aspectRatio(ratio)
                     .clip(RoundedCornerShape(8.dp))
                     .background(Color(0xFF3A3330))
-                    .clickable { if (f != null) open(f) else download(true) },
+                    .combinedClickable(onLongClick = { longPress(m) }) { if (f != null) open(f) else download(true) },
                 contentAlignment = Alignment.Center,
             ) {
                 if (shown != null) {
@@ -438,7 +546,7 @@ private fun AttachmentView(client: FalaiClient, m: LocalMessage) {
                 .width(260.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(Color.Black.copy(alpha = 0.05f))
-                .clickable { val f = file; if (f != null) open(f) else download(true) }
+                .combinedClickable(onLongClick = { longPress(m) }) { val f = file; if (f != null) open(f) else download(true) }
                 .padding(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

@@ -402,7 +402,10 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         val att = frame.attachment?.let { a ->
             val m = media(a.mediaId) ?: throw FalaiException("invalid", "Anexo não encontrado.")
             if (!m.complete) throw FalaiException("invalid", "O anexo ainda não terminou de subir.")
-            if (m.uploaderId != device.user.id) throw FalaiException("forbidden", "Anexo de outra pessoa.")
+            // Encaminhar: pode usar um arquivo que a pessoa já consegue ver (sem subir de novo).
+            if (m.uploaderId != device.user.id && !canDownload(m.id, device.user.id)) {
+                throw FalaiException("forbidden", "Anexo de outra pessoa.")
+            }
             if (!a.kind.matches(Regex("image|video|audio|file"))) throw FalaiException("invalid", "Tipo de anexo inválido.")
             // Os dados confiáveis vêm do servidor; do cliente só o tipo, a duração e a miniatura.
             a.copy(mime = m.mime, name = m.name, size = m.size, sha256 = m.sha256, thumb = sanitizeThumb(a.thumb))

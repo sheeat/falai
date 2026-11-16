@@ -281,6 +281,17 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
         messageById(id)!!
     }
 
+    /** Encaminhar: mensagem nova com um arquivo que já está no servidor (não precisa subir). */
+    fun insertPendingForward(id: String, conversationId: String, authorId: String, body: String, attachment: AttachmentDto): LocalMessage {
+        require(attachment.mediaId.isNotEmpty())
+        db.execute(
+            """INSERT INTO messages (id, seq, conversation_id, author_id, body, created_at, status, attachment_json)
+               VALUES (?, NULL, ?, ?, ?, ?, 'PENDING', ?)""",
+            id, conversationId, authorId, body, clock(), encodeAtt(attachment),
+        )
+        return messageById(id)!!
+    }
+
     /** Quantas mensagens deste aparelho ainda estão na fila (🕓). */
     fun queuedCount(): Int =
         db.query("SELECT COUNT(*) AS n FROM messages WHERE status = 'PENDING'").first().long("n").toInt()

@@ -254,3 +254,84 @@ fun makeProfilePhoto(context: Context, uri: Uri): File? {
         copied.file.delete()
     }
 }
+
+/** No Android 9 salvar fora do app precisa de permissão; do 10 em diante, não. */
+fun needsStoragePermission(): Boolean = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
+
+/**
+ * Salva uma cópia do arquivo no celular, numa pasta "Falaí": fotos em Imagens, vídeos em
+ * Filmes, áudios em Música e o resto em Downloads. Aparece na galeria. Devolve onde ficou.
+ */
+fun saveToDevice(context: Context, file: File, name: String, mime: String): String {
+    val kind = kindForMime(mime)
+    val folder = when (kind) {
+        "image" -> android.os.Environment.DIRECTORY_PICTURES
+        "video" -> android.os.Environment.DIRECTORY_MOVIES
+        "audio" -> android.os.Environment.DIRECTORY_MUSIC
+        else -> android.os.Environment.DIRECTORY_DOWNLOADS
+    }
+    val folderLabel = when (kind) {
+        "image" -> "Imagens/Falaí"
+        "video" -> "Filmes/Falaí"
+        "audio" -> "Música/Falaí"
+        else -> "Downloads/Falaí"
+    }
+    val safeName = name.replace(Regex("[\\\\/:*?\"<>|]"), "_").ifBlank { "arquivo" }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val collection = when (kind) {
+            "image" -> android.provider.MediaStore.Images.Media.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            "video" -> android.provider.MediaStore.Video.Media.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            "audio" -> android.provider.MediaStore.Audio.Media.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            else -> android.provider.MediaStore.Downloads.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        }
+        val values = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, safeName)
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mime)
+            put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, "$folder/Falaí")
+            put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val resolver = context.contentResolver
+        val uri = resolver.insert(collection, values) ?: error("O celular não deixou criar o arquivo.")
+        try {
+            resolver.openOutputStream(uri)!!.use { out -> file.inputStream().use { it.copyTo(out, 256 * 1024) } }
+            values.clear()
+            values.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+        } catch (e: Exception) {
+            resolver.delete(uri, null, null)
+            throw e
+        }
+    } else {
+        @Suppress("DEPRECATION")
+        val dir = File(android.os.Environment.getExternalStoragePublicDirectory(folder), "Falaí").apply { mkdirs() }
+        var target = File(dir, safeName)
+        var n = 1
+        while (target.exists()) {
+            target = File(dir, safeName.substringBeforeLast('.') + " ($n)" + safeName.substringAfterLast('.', "").let { if (it.isEmpty()) "" else ".$it" })
+            n++
+        }
+        file.inputStream().use { input -> target.outputStream().use { input.copyTo(it, 256 * 1024) } }
+        android.media.MediaScannerConnection.scanFile(context, arrayOf(target.path), arrayOf(mime), null)
+    }
+    return folderLabel
+}
+
+/** Manda o arquivo para outro app (WhatsApp, e-mail, Drive...). */
+fun shareFile(context: Context, file: File, mime: String) {
+    val intent = Intent(Intent.ACTION_SEND)
+        .setType(mime)
+        .putExtra(Intent.EXTRA_STREAM, uriFor(context, file))
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    val chooser = Intent.createChooser(intent, "Compartilhar com…").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    try {
+        context.startActivity(chooser)
+    } catch (e: ActivityNotFoundException) {
+        Toast.makeText(context, "Nenhum app para compartilhar.", Toast.LENGTH_LONG).show()
+    }
+}
+
+/** Manda um texto para outro app. */
+fun shareText(context: Context, text: String) {
+    val intent = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
+    context.startActivity(Intent.createChooser(intent, "Compartilhar com…").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+}

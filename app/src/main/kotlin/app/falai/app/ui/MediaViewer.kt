@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -50,8 +52,16 @@ import java.io.File
  * Vídeo: começa a tocar sozinho, com os controles do Android (pausar, avançar).
  */
 @Composable
-fun MediaViewer(file: File, att: AttachmentDto, onClose: () -> Unit) {
+fun MediaViewer(
+    file: File,
+    att: AttachmentDto,
+    onClose: () -> Unit,
+    onSave: () -> Unit = {},
+    onForward: () -> Unit = {},
+    onShare: () -> Unit = {},
+) {
     val context = LocalContext.current
+    var menu by remember { mutableStateOf(false) }
     BackHandler(onBack = onClose)
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         if (att.kind == "video") {
@@ -87,8 +97,17 @@ fun MediaViewer(file: File, att: AttachmentDto, onClose: () -> Unit) {
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.size(4.dp))
-            TextButton(onClick = { openExternally(context, file, att.mime) }) {
-                Text("Abrir com…", color = Color.White, fontSize = 13.sp)
+            TextButton(onClick = onSave) { Text("⬇ Salvar", color = Color.White, fontSize = 14.sp) }
+            Box {
+                TextButton(onClick = { menu = true }) { Text("⋮", color = Color.White, fontSize = 22.sp) }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text("↪  Encaminhar no Falaí") }, onClick = { menu = false; onForward() })
+                    DropdownMenuItem(text = { Text("📤  Compartilhar (WhatsApp…)") }, onClick = { menu = false; onShare() })
+                    DropdownMenuItem(
+                        text = { Text("Abrir com outro app") },
+                        onClick = { menu = false; openExternally(context, file, att.mime) },
+                    )
+                }
             }
         }
     }
@@ -148,7 +167,7 @@ private fun ZoomableImage(file: File) {
                 },
         )
         failed -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("Não consegui abrir esta foto aqui. Toque em \"Abrir com…\".", color = Color.White)
+            Text("Não consegui abrir esta foto aqui. Toque em ⋮ e \"Abrir com outro app\".", color = Color.White)
         }
         else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(color = Color.White)

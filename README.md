@@ -23,6 +23,7 @@ Mensageiro da família. Um celular antigo fica em casa como servidor, e os celul
 - Fotos e vídeos abrem dentro do app, em tela cheia (foto com zoom de dois dedos e toque duplo; vídeo com os controles do Android). *Abrir com…* continua lá para usar outro app.
 - **Configurações** (engrenagem no topo): trocar a foto de perfil e o nome. A família vê na hora, na lista de conversas e no topo do chat. Mostra também a versão, o servidor e a conexão.
 - Seta de voltar maior e mais grossa.
+- **Salvar, encaminhar e compartilhar:** segurando o dedo numa mensagem (ou no ⋮ / *Salvar* da tela cheia). *Salvar* põe uma cópia na galeria (pasta Falaí). *Encaminhar* manda para outra conversa sem subir o arquivo de novo. *Compartilhar* manda para outros apps (WhatsApp, e-mail…).
 
 Ainda não tem: versão no navegador com QR Code (próximo passo, M6), notificações com o app fechado (FCM), editor de fotos/vídeo, chamadas, criptografia no app.
 
