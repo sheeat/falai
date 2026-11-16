@@ -42,7 +42,7 @@ import kotlinx.coroutines.launch
 fun NewConversationScreen(client: FalaiClient, onBack: () -> Unit, onCreated: (String) -> Unit) {
     val changes by client.changes.collectAsState()
     val me = client.account.collectAsState().value?.userId ?: return
-    val people = remember(changes) { client.store.users().filter { it.id != me } }
+    val people = remember(changes) { client.store.activeUsers().filter { it.id != me } }
     val selected = remember { mutableStateListOf<String>() }
     var title by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }

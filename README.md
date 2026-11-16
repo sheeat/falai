@@ -2,7 +2,7 @@
 
 Mensageiro da família. Um celular antigo fica em casa como servidor, e os celulares e tablets da família se conectam a ele pela internet através do Cloudflare Tunnel.
 
-## Estado atual: 0.8 (chamadas de voz e vídeo)
+## Estado atual: 0.9 (cara profissional)
 
 | Parte | O que faz | Testado |
 |---|---|---|
@@ -38,6 +38,15 @@ Mensageiro da família. Um celular antigo fica em casa como servidor, e os celul
 - **Mostrar a tela**: no computador (Chrome/Edge) e no celular (Android pede confirmação: *Começar agora*).
 - O som e a imagem vão **direto** de um aparelho para o outro (WebRTC); o servidor só apresenta os dois. Para achar o caminho usamos STUN grátis (Google e Cloudflare). Se a chamada ficar em "conectando…" entre dois celulares no 4G, o administrador liga o **Ajudante de chamadas** (TURN da Cloudflare, grátis até 1.000 GB por mês) em *Configurações → Chamadas*.
 - **Tocar com o app fechado** (ligado de fábrica, em *Configurações → Chamadas*): um aviso discreto "Falaí conectado" mantém a conexão. Recomendado tocar em *Não deixar o Android desligar o Falaí*.
+
+**Cara profissional (0.9):**
+- **O aparelho é reconhecido:** se a pessoa desinstalar e instalar o Falaí de novo (ou apagar os dados), o app entra sozinho na mesma conta, sem convite. O app usa o ANDROID_ID (o número que o Android dá ao app neste aparelho; MAC e número de série não são mais permitidos) e o servidor guarda só um resumo dele. Um convite novo usado num aparelho conhecido também não cria pessoa repetida.
+- **Convite e app já com o código:** o servidor "carimba" o convite dentro do arquivo do app na hora do download (na área da assinatura que o Android ignora; a assinatura continua válida). Ao abrir, o app já tem o convite: a pessoa só confirma o nome. O administrador pode escrever o nome da pessoa ao convidar, e ele já vem preenchido. O app baixado em `/app/falai.apk` vem com o endereço do servidor.
+- **Apagar conversa** (segurar o dedo na conversa, ou ⋮ dentro dela; no computador, ⋮ ou botão direito): some da lista em todos os seus aparelhos; para os outros nada muda; se chegar mensagem nova, ela volta só com as novas.
+- **Tirar alguém da família** (só o administrador: ⋮ na conversa, ou *Configurações → Pessoas da família*): os aparelhos da pessoa são desligados na hora; as mensagens antigas ficam.
+- **Fundo das conversas:** cor calma com desenhinhos clarinhos (7 cores, desenhos liga/desliga, ou uma foto da galeria). *Configurações → Fundo das conversas* (no computador, na engrenagem).
+- **Ícone próprio** (casa-balão com coração) no app, no servidor, nos avisos, na tela de abertura; favicon, ícone de "instalar" e página do convite com a marca no computador.
+- Configurações mais limpas: só conexão e versão.
 
 Ainda não tem: notificações pelo Google (FCM), editor de vídeo, criptografia no app.
 

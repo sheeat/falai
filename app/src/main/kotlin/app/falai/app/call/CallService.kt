@@ -70,7 +70,7 @@ class CallService : Service() {
                     Notification.Action.Builder(null, "Desligar", actionIntent(this, CallActionReceiver.HANGUP)).build()
                 )
         } else {
-            b.setSmallIcon(android.R.drawable.stat_notify_chat)
+            b.setSmallIcon(app.falai.app.R.drawable.ic_stat_falai)
                 .setContentTitle("Falaí conectado")
                 .setContentText("Pronto para receber chamadas. Dá para esconder este aviso nas configurações do Android.")
                 .setCategory(Notification.CATEGORY_SERVICE)

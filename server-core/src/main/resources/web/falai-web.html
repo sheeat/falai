@@ -4,7 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Falaí</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23136F7A'/%3E%3Ctext x='32' y='43' font-size='32' text-anchor='middle' fill='white' font-family='sans-serif' font-weight='bold'%3EF%3C/text%3E%3C/svg%3E">
+<meta name="theme-color" content="#136F7A">
+<meta name="description" content="Falaí, o mensageiro da família">
+<link rel="icon" type="image/svg+xml" href="/web/icon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="/web/favicon-32.png">
+<link rel="apple-touch-icon" href="/web/apple-touch-icon.png">
+<link rel="manifest" href="/web/manifest.webmanifest">
 <style>
   :root {
     --primary: #136F7A; --primary-dark: #0B4F57; --chat-bg: #ECF3F3; --out: #CFEDEF; --in: #FFFFFF;
@@ -22,7 +27,8 @@
   .card { background: var(--panel); border-radius: 16px; box-shadow: 0 6px 30px rgba(0,0,0,.08); padding: 32px; max-width: 760px; width: 100%;
           display: grid; grid-template-columns: 1fr 280px; gap: 32px; align-items: center; }
   .card h1 { margin: 0 0 6px; font-size: 26px; }
-  .card .brand { color: var(--primary); font-weight: 800; font-size: 15px; letter-spacing: .5px; margin-bottom: 18px; }
+  .card .brand { color: var(--primary); font-weight: 800; font-size: 22px; margin-bottom: 18px; display: flex; align-items: center; gap: 10px; }
+  .card .brand img { width: 44px; height: 44px; }
   .card ol { padding-left: 22px; margin: 18px 0; line-height: 1.7; font-size: 16px; }
   .card .hint { color: var(--text-sec); font-size: 14px; line-height: 1.5; }
   #qr { width: 280px; height: 280px; border-radius: 12px; border: 1px solid var(--divider); padding: 8px; background: #fff; position: relative; }
@@ -68,7 +74,24 @@
 
   #main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--chat-bg); }
   #welcome { flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; color: var(--text-sec); gap: 8px; text-align: center; padding: 24px; }
-  #welcome .big { font-size: 56px; }
+  #welcome .logo { width: 96px; height: 96px; margin-bottom: 6px; filter: drop-shadow(0 4px 14px rgba(19,111,122,.25)); }
+  #welcome .card2 { background: rgba(255,255,255,.82); border-radius: 18px; padding: 28px 32px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  #welcome .ver { font-size: 12px; color: var(--text-sec); margin-top: 6px; }
+  /* Fundo das conversas: cor calma + desenhinhos (ou uma foto escolhida). */
+  #main { background-color: var(--wall-color, #E6EFEE); background-image: var(--wall-img, url(/web/desenhos.svg)); background-size: var(--wall-size, 280px); background-position: center; }
+  .menu { position: absolute; background: #fff; border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.18); padding: 6px 0; z-index: 9; min-width: 230px; }
+  .menu button { display: block; width: 100%; text-align: left; background: transparent; border: 0; padding: 10px 16px; font-size: 15px; color: var(--text); }
+  .menu button:hover { background: var(--hover); }
+  .menu button.danger { color: var(--error); }
+  .walls { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+  .walls button { width: 46px; height: 46px; border-radius: 12px; border: 2px solid var(--divider); background-size: 140px; padding: 0; }
+  .walls button.on { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary); }
+  .walls button.photo { background: #F0F6F6; font-size: 20px; }
+  .switch { display: flex; align-items: center; gap: 10px; font-size: 14px; justify-content: center; }
+  .ask .body p { margin: 0; line-height: 1.5; color: var(--text-sec); }
+  .ask .row { justify-content: flex-end; }
+  .btn.danger { background: var(--error); }
+  .btn.danger:hover { background: #A31F1F; }
   #chat { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   #messages { flex: 1; overflow-y: auto; padding: 14px 6%; display: flex; flex-direction: column; gap: 4px; }
   .day { align-self: center; background: rgba(255,255,255,.85); color: var(--text-sec); font-size: 12px; padding: 3px 10px; border-radius: 8px; margin: 8px 0; }
@@ -246,7 +269,7 @@
 <div id="login" class="hidden">
   <div class="card">
     <div>
-      <div class="brand">FALAÍ</div>
+      <div class="brand"><img src="/web/icon.svg" alt="">Falaí</div>
       <h1>Use o Falaí no computador</h1>
       <ol>
         <li>Abra o <b>Falaí</b> no seu celular.</li>
@@ -281,9 +304,13 @@
   </aside>
   <main id="main">
     <div id="welcome">
-      <div class="big">💬</div>
-      <div><b>Escolha uma conversa</b> na lista ao lado.</div>
-      <div style="font-size:14px">Para começar uma conversa nova, use o Falaí no celular.</div>
+      <div class="card2">
+        <img class="logo" src="/web/icon.svg" alt="">
+        <div style="font-size:20px;color:var(--text)"><b>Falaí</b> no computador</div>
+        <div><b>Escolha uma conversa</b> na lista ao lado.</div>
+        <div style="font-size:14px">Para começar uma conversa nova, use o Falaí no celular.</div>
+        <div class="ver">Versão {{FALAI_VERSION}}</div>
+      </div>
     </div>
     <div id="chat" class="hidden">
       <div class="topbar">
@@ -296,6 +323,11 @@
         <button id="joinCall" class="hidden" title="Entrar na chamada desta conversa">📞 Entrar na chamada</button>
         <button class="icon" id="callVoice" title="Chamada de voz">📞</button>
         <button class="icon" id="callVideo" title="Chamada de vídeo">🎥</button>
+        <button class="icon" id="chatMenuBtn" title="Mais opções" style="font-size:22px;font-weight:700">⋮</button>
+      </div>
+      <div id="chatMenu" class="menu hidden" style="right:12px;top:58px">
+        <button id="mnClear" class="danger">🗑️  Apagar conversa</button>
+        <button id="mnRemove" class="danger hidden"></button>
       </div>
       <div id="messages"></div>
       <div id="composer">
@@ -348,12 +380,30 @@
       <button class="btn" id="setSave" disabled>Salvar nome</button>
       <div class="msgline" id="setMsg"></div>
       <hr style="border:0;border-top:1px solid var(--divider);margin:4px 0">
+      <label>Fundo das conversas</label>
+      <div class="walls" id="setWalls"></div>
+      <input type="file" id="setWallInput" accept="image/*" class="hidden">
+      <label class="switch"><input type="checkbox" id="setDoodles"> Desenhinhos no fundo</label>
+      <hr style="border:0;border-top:1px solid var(--divider);margin:4px 0">
       <div class="info">
         <span>Conexão</span><span id="setConn"></span>
-        <span>Servidor</span><span id="setHost"></span>
-        <span>Este computador</span><span>ligado ao seu Falaí</span>
+        <span>Versão do Falaí</span><span>{{FALAI_VERSION}}</span>
       </div>
       <button class="btn ghost" id="setLogout">Sair deste computador</button>
+    </div>
+  </div>
+</div>
+
+<!-- Pergunta de confirmação (apagar, remover) -->
+<div id="ask" class="modal ask hidden">
+  <div class="sheet" style="max-width:400px">
+    <div class="head"><span class="grow" id="askTitle"></span></div>
+    <div class="body">
+      <p id="askText"></p>
+      <div class="row">
+        <button class="btn ghost" id="askNo">Cancelar</button>
+        <button class="btn danger" id="askYes"></button>
+      </div>
     </div>
   </div>
 </div>
@@ -627,7 +677,12 @@
         state.deviceId = f.deviceId;
         if (typeof Calls !== "undefined" && Calls) Calls.onReconnected();
         state.users[f.user.id] = f.user;
-        f.conversations.forEach(function (c) { state.convs[c.id] = c; });
+        // A lista do servidor é a verdade: conversa apagada (em outro aparelho) some daqui também.
+        var fresh = {};
+        f.conversations.forEach(function (c) { fresh[c.id] = c; applyCleared(c); });
+        Object.keys(state.convs).forEach(function (id) { if (!fresh[id]) forgetConv(id); });
+        state.convs = fresh;
+        if (state.current && !fresh[state.current]) closeChat();
         setAvatar($("meAvatar"), f.user.name, f.user.avatarMediaId);
         setStatus(true, "online");
         send({ type: "list_users", requestId: "web-users" });
@@ -670,6 +725,13 @@
         break;
       case "conversation":
         state.convs[f.conversation.id] = f.conversation;
+        applyCleared(f.conversation);
+        renderConvs();
+        if (f.conversation.id === state.current) renderChat();
+        break;
+      case "conversation_hidden":
+        forgetConv(f.conversationId);
+        if (state.current === f.conversationId) closeChat();
         renderConvs();
         break;
       case "call_ring": Calls.onRing(f.call); break;
@@ -684,6 +746,17 @@
     }
   }
 
+  // Conversa apagada por mim: as mensagens até "clearedSeq" não aparecem mais.
+  function applyCleared(c) {
+    if (!c.clearedSeq || !state.messages[c.id]) return;
+    state.messages[c.id] = state.messages[c.id].filter(function (m) { return m.seq == null || m.seq > c.clearedSeq; });
+  }
+  function forgetConv(id) {
+    delete state.convs[id];
+    delete state.messages[id];
+    delete state.unread[id];
+  }
+
   function findLocal(id) {
     for (var c in state.messages) {
       var list = state.messages[c];
@@ -693,6 +766,8 @@
   }
 
   function addMessage(m, fromSync) {
+    var conv = state.convs[m.conversationId];
+    if (conv && conv.clearedSeq && m.seq && m.seq <= conv.clearedSeq) return;
     var list = state.messages[m.conversationId] || (state.messages[m.conversationId] = []);
     var existing = null;
     for (var i = 0; i < list.length; i++) if (list[i].id === m.id) { existing = list[i]; break; }
@@ -791,6 +866,8 @@
     }).join("");
     Array.prototype.forEach.call($("convs").querySelectorAll(".conv"), function (el) {
       el.onclick = function () { openConv(el.getAttribute("data-id")); };
+      // Botão direito: apagar a conversa.
+      el.oncontextmenu = function (e) { e.preventDefault(); clearConversation(el.getAttribute("data-id")); };
     });
     // Foto que não abriu: fica a inicial.
     Array.prototype.forEach.call($("convs").querySelectorAll(".avatar img"), function (img) {
@@ -810,13 +887,140 @@
     renderChat(true);
     $("text").focus();
   }
-  $("back").onclick = function () {
+  function closeChat() {
     state.current = null;
     $("app").classList.remove("in-chat");
     $("chat").classList.add("hidden");
     $("welcome").classList.remove("hidden");
+    $("chatMenu").classList.add("hidden");
     renderConvs();
+  }
+  $("back").onclick = closeChat;
+
+  // ---------- apagar conversa / tirar alguém da família ----------
+  function ask(title, text, yesLabel) {
+    return new Promise(function (resolve) {
+      $("askTitle").textContent = title;
+      $("askText").textContent = text;
+      $("askYes").textContent = yesLabel;
+      $("ask").classList.remove("hidden");
+      function done(v) { $("ask").classList.add("hidden"); $("askYes").onclick = $("askNo").onclick = null; resolve(v); }
+      $("askYes").onclick = function () { done(true); };
+      $("askNo").onclick = function () { done(false); };
+      $("ask").onclick = function (e) { if (e.target === $("ask")) done(false); };
+    });
+  }
+  async function clearConversation(id) {
+    var c = state.convs[id];
+    if (!c) return;
+    var ok = await ask("Apagar conversa?",
+      "A conversa " + (c.kind === "group" ? "do grupo \"" + convName(c) + "\"" : "com " + convName(c)) +
+      " some da sua lista, no computador e no celular. Para os outros nada muda. Se chegar mensagem nova, ela volta.", "Apagar");
+    if (!ok) return;
+    try {
+      await request({ type: "hide_conversation", conversationId: id });
+      forgetConv(id);
+      if (state.current === id) closeChat();
+      renderConvs();
+      toast("Conversa apagada.");
+    } catch (e) { toast(e.message); }
+  }
+  async function removeFromFamily(userId) {
+    var name = userName(userId);
+    var ok = await ask("Tirar " + name + " da família?",
+      "Os aparelhos de " + name + " são desligados do Falaí na hora e " + name + " não aparece mais para começar conversa. " +
+      "As mensagens antigas continuam. Para voltar, só com um convite novo.", "Tirar da família");
+    if (!ok) return;
+    try {
+      var f = await request({ type: "remove_user", userId: userId });
+      state.users[f.user.id] = f.user;
+      renderChat();
+      toast(name + " saiu da família.");
+    } catch (e) { toast(e.message); }
+  }
+  $("chatMenuBtn").onclick = function (e) {
+    e.stopPropagation();
+    var c = state.convs[state.current];
+    if (!c) return;
+    var other = otherId(c);
+    var u = other ? state.users[other] : null;
+    var canRemove = state.me && state.me.isAdmin && u && !u.isAdmin && !u.removed;
+    $("mnRemove").classList.toggle("hidden", !canRemove);
+    if (canRemove) $("mnRemove").textContent = "🚫  Tirar " + u.name + " da família";
+    $("chatMenu").classList.toggle("hidden");
   };
+  document.addEventListener("click", function (e) {
+    if (!$("chatMenu").contains(e.target)) $("chatMenu").classList.add("hidden");
+  });
+  $("mnClear").onclick = function () { $("chatMenu").classList.add("hidden"); clearConversation(state.current); };
+  $("mnRemove").onclick = function () {
+    $("chatMenu").classList.add("hidden");
+    var o = otherId(state.convs[state.current]);
+    if (o) removeFromFamily(o);
+  };
+
+  // ---------- fundo das conversas ----------
+  var WALLS = [
+    ["petroleo", "Azul-petróleo", "#E6EFEE"], ["areia", "Areia", "#F2ECE3"], ["menta", "Menta", "#E3F1E8"],
+    ["ceu", "Céu", "#E2ECF5"], ["lavanda", "Lavanda", "#ECE9F4"], ["pessego", "Pêssego", "#F6E8E1"], ["cinza", "Cinza", "#ECEDEE"]
+  ];
+  function loadWall() {
+    try { return JSON.parse(localStorage.getItem("falai_fundo") || "{}") || {}; } catch (e) { return {}; }
+  }
+  function saveWall(w) {
+    try { localStorage.setItem("falai_fundo", JSON.stringify(w)); return true; } catch (e) { return false; }
+  }
+  function applyWall() {
+    var w = loadWall();
+    var color = (WALLS.filter(function (x) { return x[0] === w.cor; })[0] || WALLS[0])[2];
+    var main = $("main").style;
+    main.setProperty("--wall-color", color);
+    if (w.foto) {
+      main.setProperty("--wall-img", 'url("' + w.foto + '")');
+      main.setProperty("--wall-size", "cover");
+    } else {
+      main.setProperty("--wall-img", w.desenhos === false ? "none" : "url(/web/desenhos.svg)");
+      main.setProperty("--wall-size", "280px");
+    }
+  }
+  function renderWalls() {
+    var w = loadWall();
+    $("setWalls").innerHTML = WALLS.map(function (x) {
+      var on = !w.foto && (w.cor || "petroleo") === x[0];
+      return '<button title="' + esc(x[1]) + '" data-cor="' + x[0] + '" class="' + (on ? "on" : "") + '" style="background-color:' + x[2] +
+        ';background-image:url(/web/desenhos.svg)"></button>';
+    }).join("") + '<button class="photo' + (w.foto ? " on" : "") + '" id="setWallPhoto" title="Usar uma foto como fundo">🖼️</button>';
+    $("setDoodles").checked = w.desenhos !== false;
+    $("setDoodles").disabled = !!w.foto;
+    Array.prototype.forEach.call($("setWalls").querySelectorAll("button[data-cor]"), function (b) {
+      b.onclick = function () { var v = loadWall(); v.cor = b.getAttribute("data-cor"); delete v.foto; saveWall(v); applyWall(); renderWalls(); };
+    });
+    $("setWallPhoto").onclick = function () { $("setWallInput").click(); };
+  }
+  $("setDoodles").onchange = function () { var v = loadWall(); v.desenhos = $("setDoodles").checked; saveWall(v); applyWall(); };
+  $("setWallInput").onchange = function () {
+    var file = this.files && this.files[0];
+    this.value = "";
+    if (!file) return;
+    var url = URL.createObjectURL(file);
+    var img = new Image();
+    img.onload = function () {
+      // Guarda uma cópia menor (cabe na memória do navegador) e um pouco clara, para as mensagens aparecerem bem.
+      var max = 1600, sc = Math.min(1, max / Math.max(img.width, img.height));
+      var c = document.createElement("canvas");
+      c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc);
+      var g = c.getContext("2d");
+      g.drawImage(img, 0, 0, c.width, c.height);
+      g.fillStyle = "rgba(255,255,255,.18)"; g.fillRect(0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      var v = loadWall(); v.foto = c.toDataURL("image/jpeg", 0.82);
+      if (!saveWall(v)) { toast("A foto é grande demais para guardar. Escolha outra."); return; }
+      applyWall(); renderWalls();
+    };
+    img.onerror = function () { URL.revokeObjectURL(url); toast("Não consegui abrir essa foto."); };
+    img.src = url;
+  };
+  applyWall();
 
   function renderChatHeader() {
     var c = state.convs[state.current];
@@ -828,8 +1032,10 @@
     var act = typeof Calls !== "undefined" ? Calls.activeIn(c.id) : null;
     var inThis = act && typeof Calls !== "undefined" && Calls.inCall(c.id);
     $("joinCall").classList.toggle("hidden", !act || inThis || !act.participants.length);
-    $("callVoice").disabled = $("callVideo").disabled = !state.online || !!act;
-    if (c.kind === "group") {
+    $("callVoice").disabled = $("callVideo").disabled = !state.online || !!act || !!(u && u.removed);
+    if (u && u.removed) {
+      $("chatSub").textContent = "saiu da família";
+    } else if (c.kind === "group") {
       $("chatSub").textContent = c.memberIds.map(userName).join(", ");
     } else {
       $("chatSub").innerHTML = '<span class="dot' + (state.online ? " on" : "") + '"></span>' + (state.online ? "online" : "sem conexão");
@@ -1211,7 +1417,7 @@
     $("setNoPhoto").classList.toggle("hidden", !state.me.avatarMediaId);
     $("setPhoto").textContent = state.me.avatarMediaId ? "Trocar foto" : "Escolher foto";
     $("setConn").innerHTML = '<span class="dot' + (state.online ? " on" : "") + '"></span> ' + (state.online ? "online" : "sem conexão");
-    $("setHost").textContent = location.host;
+    renderWalls();
     $("setSave").disabled = !$("setName").value.trim() || $("setName").value.trim() === state.me.name;
   }
   function setMsg(text, ok) { $("setMsg").textContent = text || ""; $("setMsg").style.color = ok ? "var(--online)" : "var(--error)"; }

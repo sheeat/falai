@@ -670,4 +670,76 @@ class FalaiClientTest {
         }
         j1.cancel(); j2.cancel()
     }
+
+    // ---------- 0.9 ----------
+
+    @Test
+    fun `app reinstalado entra sozinho na mesma conta`() = runBlocking<Unit> {
+        val chefe = newClient("chefe")
+        chefe.pair(url, adminCode, "Celular do Chefe", "Chefe")
+        online(chefe)
+        val ana = newClient("ana")
+        val key = "android-id-da-ana-1234567890"
+        ana.pair(url, chefe.createInvite(name = "Ana").code, "Celular da Ana", "Ana", installKey = key)
+        online(ana)
+        val conv = chefe.createConversation("direct", null, listOf(ana.account.value!!.userId))
+        chefe.send(conv.id, "oi Ana")
+        eventually("Ana receber") { bodies(ana, conv.id) == listOf("oi Ana") }
+        ana.stop()
+
+        // "Desinstalou e instalou de novo": banco novo, sem conta.
+        val ana2 = newClient("ana-reinstalada")
+        assertEquals(null, ana2.reconnect(url, "aparelho-desconhecido-000000", "Outro"))
+        assertEquals(null, ana2.account.value)
+        assertEquals("Ana", ana2.reconnect(url, key, "Celular da Ana"))
+        assertEquals(ana.account.value!!.userId, ana2.account.value!!.userId)
+        online(ana2)
+        // O histórico volta todo.
+        eventually("histórico voltar") { bodies(ana2, conv.id) == listOf("oi Ana") }
+    }
+
+    @Test
+    fun `apagar conversa some nos meus aparelhos e volta com mensagem nova`() = runBlocking<Unit> {
+        val (chefe, ana, conv) = family()
+        chefe.send(conv, "primeira")
+        eventually("Ana receber") { bodies(ana, conv) == listOf("primeira") }
+        // Segundo aparelho da Ana, desligado na hora em que ela apaga.
+        val anaTablet = newClient("ana-tablet")
+        anaTablet.pair(url, chefe.createInvite(ana.account.value!!.userId).code, "Tablet", null)
+        online(anaTablet)
+        eventually("tablet sincronizar") { bodies(anaTablet, conv) == listOf("primeira") }
+        anaTablet.stop()
+
+        ana.hideConversation(conv)
+        val me = ana.account.value!!.userId
+        assertTrue(ana.store.conversationSummaries(me).none { it.id == conv })
+        assertTrue(ana.store.messages(conv).isEmpty())
+        // O Chefe continua vendo tudo.
+        assertEquals(listOf("primeira"), bodies(chefe, conv))
+
+        // O tablet volta a conectar: a conversa some lá também.
+        anaTablet.start()
+        eventually("sumir no tablet") { anaTablet.store.conversationSummaries(me).none { it.id == conv } }
+
+        // Mensagem nova: volta, só com a nova.
+        chefe.send(conv, "segunda")
+        eventually("voltar na Ana") { bodies(ana, conv) == listOf("segunda") }
+        assertTrue(ana.store.conversationSummaries(me).any { it.id == conv })
+        eventually("voltar no tablet") { bodies(anaTablet, conv) == listOf("segunda") }
+    }
+
+    @Test
+    fun `administrador tira alguem da familia`() = runBlocking<Unit> {
+        val (chefe, ana, _) = family()
+        val anaId = ana.account.value!!.userId
+        val u = chefe.removeUser(anaId)
+        assertTrue(u.removed)
+        eventually("Ana ser desligada") { ana.connection.value == ConnectionState.UNAUTHORIZED }
+        eventually("Chefe saber") { chefe.store.user(anaId)?.removed == true }
+        assertTrue(chefe.store.activeUsers().none { it.id == anaId })
+        assertEquals("Ana", chefe.store.user(anaId)!!.name)
+        // A Ana não consegue tirar ninguém (nem está mais conectada); o Chefe não pode se tirar.
+        val e = assertFailsWith<FalaiClientException> { chefe.removeUser(chefe.account.value!!.userId) }
+        assertEquals("invalid", e.code)
+    }
 }

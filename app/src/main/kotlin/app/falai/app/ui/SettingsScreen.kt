@@ -58,13 +58,13 @@ import kotlinx.coroutines.withContext
  * Tudo que muda aqui a família vê na hora.
  */
 @Composable
-fun SettingsScreen(client: FalaiClient, onBack: () -> Unit, onInvite: () -> Unit, onWebLink: () -> Unit) {
+fun SettingsScreen(client: FalaiClient, onBack: () -> Unit, onInvite: () -> Unit, onWebLink: () -> Unit, onWallpaper: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val changes by client.changes.collectAsState()
     val account by client.account.collectAsState()
     val state by client.connection.collectAsState()
-    val publicBase by client.publicBase.collectAsState()
+    var showFamily by remember { mutableStateOf(false) }
     val acc = account ?: return
     val me = remember(changes) { client.store.user(acc.userId) }
     val myName = me?.name ?: ""
@@ -184,6 +184,13 @@ fun SettingsScreen(client: FalaiClient, onBack: () -> Unit, onInvite: () -> Unit
                 )
             }
 
+            // ---- Conversas ----
+            HorizontalDivider(color = FalaiColors.Divider)
+            Text("Conversas", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+            OutlinedButton(onClick = onWallpaper, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                Text("🎨  Fundo das conversas")
+            }
+
             // ---- Chamadas ----
             HorizontalDivider(color = FalaiColors.Divider)
             Text("Chamadas", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
@@ -202,18 +209,18 @@ fun SettingsScreen(client: FalaiClient, onBack: () -> Unit, onInvite: () -> Unit
                 OutlinedButton(onClick = onInvite, modifier = Modifier.fillMaxWidth().height(48.dp)) {
                     Text("Convidar alguém da família")
                 }
+                OutlinedButton(onClick = { showFamily = true }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                    Text("Pessoas da família")
+                }
             }
 
             // ---- Sobre ----
             HorizontalDivider(color = FalaiColors.Divider)
-            Text("Sobre este aparelho", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
             InfoLine("Conexão", null) { ConnectionBadge(state, onDark = false) }
             InfoLine("Versão do Falaí", appVersion)
-            InfoLine("Servidor", acc.serverUrl)
-            publicBase?.let { InfoLine("Endereço na internet", it) }
-            if (acc.isAdmin) InfoLine("Função", "Administrador da família")
         }
     }
+    if (showFamily) FamilyDialog(client) { showFamily = false }
 }
 
 @Composable

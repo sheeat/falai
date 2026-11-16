@@ -16,6 +16,9 @@ import kotlinx.serialization.json.Json
  */
 const val PROTOCOL_VERSION = 1
 
+/** Versão do Falaí (servidor e página web). O app usa a do build.gradle. */
+const val FALAI_VERSION = "0.9.0"
+
 val FalaiJson = Json {
     classDiscriminator = "type"
     ignoreUnknownKeys = true
@@ -37,6 +40,12 @@ data class PairRequest(
      * reconhece e responde de novo, em vez de dizer que o convite já foi usado.
      */
     val attemptId: String? = null,
+    /**
+     * Identidade deste aparelho, que sobrevive a desinstalar e instalar de novo (no Android, vem do
+     * ANDROID_ID). Se o servidor já conhece este aparelho, ele volta para a mesma pessoa, sem
+     * criar outra conta.
+     */
+    val installKey: String? = null,
 )
 
 @Serializable
@@ -45,7 +54,18 @@ data class PairResponse(
     val deviceId: String,
     val token: String,
     val isAdmin: Boolean,
+    /** Nome da pessoa (para dizer "Bem-vindo de volta, Ana"). */
+    val userName: String? = null,
+    /** true = o aparelho já era conhecido e voltou para a mesma pessoa. */
+    val returning: Boolean = false,
 )
+
+/**
+ * POST /api/reconnect: o app foi instalado de novo (ou os dados foram apagados) num aparelho que o
+ * servidor já conhece. Volta sem convite. 404 = aparelho desconhecido (aí precisa de convite).
+ */
+@Serializable
+data class ReconnectRequest(val installKey: String, val deviceName: String)
 
 @Serializable
 data class ErrorResponse(val error: String, val message: String)
@@ -59,6 +79,8 @@ data class UserDto(
     val isAdmin: Boolean,
     /** Foto de perfil (um arquivo já enviado ao servidor), ou null. */
     val avatarMediaId: String? = null,
+    /** O administrador tirou a pessoa da família (as mensagens antigas continuam com o nome dela). */
+    val removed: Boolean = false,
 )
 
 @Serializable
@@ -68,6 +90,8 @@ data class ConversationDto(
     val title: String?,
     val memberIds: List<String>,
     val createdAt: Long,
+    /** A pessoa apagou a conversa até esta mensagem: as mais antigas somem dos aparelhos dela. */
+    val clearedSeq: Long? = null,
 )
 
 @Serializable
@@ -121,11 +145,24 @@ fun sanitizeThumb(thumb: String?): String? =
 object InviteLinks {
     fun page(base: String, code: String) = "${base.trimEnd('/')}/convite/$code"
 
-    fun appUri(base: String, code: String, forExistingUser: Boolean = false): String =
-        "falai://convite?s=" + java.net.URLEncoder.encode(base.trimEnd('/'), "UTF-8") + "&c=" + code +
-            (if (forExistingUser) "&d=1" else "")
+    private fun enc(s: String) = java.net.URLEncoder.encode(s, "UTF-8").replace("+", "%20")
 
-    data class Parsed(val server: String, val code: String, val forExistingUser: Boolean)
+    fun appUri(base: String, code: String, forExistingUser: Boolean = false, name: String? = null): String =
+        "falai://convite?s=" + enc(base.trimEnd('/')) + "&c=" + code +
+            (if (forExistingUser) "&d=1" else "") +
+            (name?.takeIf { it.isNotBlank() }?.let { "&n=" + enc(it.trim()) } ?: "")
+
+    /** Carimbo do APK baixado sem convite: só o endereço, para o app achar o servidor sozinho. */
+    fun serverUri(base: String): String = "falai://servidor?s=" + enc(base.trimEnd('/'))
+
+    /** Endereço de um texto "falai://servidor?s=..." (ou de um convite). */
+    fun parseServer(text: String): String? {
+        parse(text)?.let { return it.server }
+        val m = Regex("""falai://servidor\?s=([^\s&]+)""").find(text.trim()) ?: return null
+        return java.net.URLDecoder.decode(m.groupValues[1], "UTF-8").takeIf { it.startsWith("http") }
+    }
+
+    data class Parsed(val server: String, val code: String, val forExistingUser: Boolean, val name: String? = null)
 
     /** Entende o link da página, o atalho do app ou um texto colado que contenha um deles. */
     fun parse(text: String): Parsed? {
@@ -136,7 +173,7 @@ object InviteLinks {
             }.toMap()
             val s = params["s"] ?: return null
             val c = params["c"] ?: return null
-            return Parsed(s, c.uppercase(), params["d"] == "1")
+            return Parsed(s, c.uppercase(), params["d"] == "1", params["n"]?.trim()?.take(60)?.takeIf { it.isNotEmpty() })
         }
         Regex("""(https?://[A-Za-z0-9.\-]+(?::\d+)?)/convite/([A-Za-z0-9]+)""").find(t)?.let { m ->
             return Parsed(m.groupValues[1], m.groupValues[2].uppercase(), false)
@@ -201,7 +238,17 @@ data class CreateInviteFrame(
     val requestId: String,
     /** Preenchido = convite para ligar mais um aparelho a essa pessoa. Vazio = pessoa nova. */
     val forUserId: String? = null,
+    /** Pessoa nova: o nome que já aparece preenchido para ela (ela pode mudar). */
+    val name: String? = null,
 ) : ClientFrame
+
+/** "Apagar conversa": some da minha lista (em todos os meus aparelhos) até chegar mensagem nova. */
+@Serializable @SerialName("hide_conversation")
+data class HideConversationFrame(val requestId: String, val conversationId: String) : ClientFrame
+
+/** Só o administrador: tira a pessoa da família. Os aparelhos dela são desligados na hora. */
+@Serializable @SerialName("remove_user")
+data class RemoveUserFrame(val requestId: String, val userId: String) : ClientFrame
 
 @Serializable @SerialName("ping")
 data class PingFrame(val requestId: String) : ClientFrame
@@ -270,6 +317,10 @@ data class UserUpdatedFrame(val requestId: String?, val user: UserDto) : ServerF
 /** Resposta a [SetPublicAddressFrame]. */
 @Serializable @SerialName("public_address")
 data class PublicAddressFrame(val requestId: String, val publicBase: String) : ServerFrame
+
+/** A conversa foi apagada por mim: sai da lista e as mensagens até [clearedSeq] somem. */
+@Serializable @SerialName("conversation_hidden")
+data class ConversationHiddenFrame(val requestId: String? = null, val conversationId: String, val clearedSeq: Long) : ServerFrame
 
 @Serializable @SerialName("pong")
 data class PongFrame(val requestId: String) : ServerFrame

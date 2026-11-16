@@ -130,6 +130,19 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
                 db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '4')")
             }
         }
+        if (version < 5) {
+            db.transaction {
+                // 0.9: reconhecer o aparelho que reinstalou o app, apagar conversa, tirar pessoa da família,
+                // nome sugerido no convite.
+                db.execute("ALTER TABLE devices ADD COLUMN install_key_hash TEXT")
+                db.execute("CREATE INDEX devices_by_install_key ON devices(install_key_hash)")
+                db.execute("ALTER TABLE users ADD COLUMN removed_at INTEGER")
+                db.execute("ALTER TABLE members ADD COLUMN cleared_seq INTEGER NOT NULL DEFAULT 0")
+                db.execute("ALTER TABLE members ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0")
+                db.execute("ALTER TABLE invites ADD COLUMN suggested_name TEXT")
+                db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '5')")
+            }
+        }
     }
 
     // ---------- Utilidades ----------
@@ -165,7 +178,7 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
     }
 
     /** O que a página do convite mostra. [status]: "ok", "used", "expired" ou "invalid". */
-    data class InvitePreview(val status: String, val inviterName: String?, val forUserName: String?)
+    data class InvitePreview(val status: String, val inviterName: String?, val forUserName: String?, val suggestedName: String? = null)
 
     fun invitePreview(code: String): InvitePreview {
         val c = normalizeCode(code)
@@ -179,7 +192,7 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
             invite.long("expires_at") < clock() -> "expired"
             else -> "ok"
         }
-        return InvitePreview(status, inviter, forUser)
+        return InvitePreview(status, inviter, forUser, invite.stringOrNull("suggested_name"))
     }
 
     // ---------- Usuários e convites ----------
@@ -203,7 +216,7 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         code to expires
     }
 
-    fun createInvite(by: UserDto, forUserId: String?, validForMs: Long = INVITE_VALID_MS): Pair<String, Long> {
+    fun createInvite(by: UserDto, forUserId: String?, validForMs: Long = INVITE_VALID_MS, suggestedName: String? = null): Pair<String, Long> {
         if (!by.isAdmin) throw FalaiException("forbidden", "Só o administrador cria convites.")
         if (forUserId != null && userById(forUserId) == null) {
             throw FalaiException("not_found", "Pessoa não encontrada.")
@@ -211,8 +224,9 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         val code = newInviteCode()
         val expires = clock() + validForMs
         db.execute(
-            "INSERT INTO invites (code_hash, created_by, for_user_id, make_admin, expires_at) VALUES (?, ?, ?, 0, ?)",
+            "INSERT INTO invites (code_hash, created_by, for_user_id, make_admin, expires_at, suggested_name) VALUES (?, ?, ?, 0, ?, ?)",
             sha256(code), by.id, forUserId, expires,
+            suggestedName?.trim()?.take(60)?.takeIf { it.isNotEmpty() && forUserId == null },
         )
         return code to expires
     }
@@ -248,9 +262,25 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         if (invite.long("expires_at") < clock()) throw FalaiException("invalid_code", "Este convite expirou.")
 
         val now = clock()
+        val installHash = installKeyHash(req.installKey)
+        // Aparelho que o servidor já conhece (o app foi instalado de novo): volta para a mesma
+        // pessoa, em vez de criar uma conta repetida. O convite é gasto do mesmo jeito.
+        if (installHash != null) {
+            val known = knownDevice(installHash)
+            if (known != null) {
+                val token = newToken()
+                db.update("UPDATE devices SET token_hash = ?, name = ? WHERE id = ?", sha256(token), deviceName, known.first)
+                db.update(
+                    "UPDATE invites SET used_at = ?, used_attempt_hash = ?, used_device_id = ? WHERE code_hash = ? AND used_at IS NULL",
+                    now, attemptHash, known.first, sha256(code),
+                )
+                return@transaction PairResponse(known.second.id, known.first, token, known.second.isAdmin, known.second.name, returning = true)
+            }
+        }
         val existingUserId = invite.stringOrNull("for_user_id")
         val user: UserDto = if (existingUserId != null) {
-            userById(existingUserId) ?: throw FalaiException("invalid_code", "A pessoa deste convite não existe mais.")
+            userById(existingUserId)?.takeIf { !it.removed }
+                ?: throw FalaiException("invalid_code", "A pessoa deste convite não existe mais.")
         } else {
             val name = req.userName?.trim()?.take(60).orEmpty()
             if (name.isEmpty()) throw FalaiException("invalid", "Informe o seu nome.")
@@ -265,8 +295,8 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         val token = newToken()
         val deviceId = newId()
         db.execute(
-            "INSERT INTO devices (id, user_id, name, token_hash, created_at) VALUES (?, ?, ?, ?, ?)",
-            deviceId, user.id, deviceName, sha256(token), now,
+            "INSERT INTO devices (id, user_id, name, token_hash, created_at, install_key_hash) VALUES (?, ?, ?, ?, ?, ?)",
+            deviceId, user.id, deviceName, sha256(token), now, installHash,
         )
         val changed = db.update(
             "UPDATE invites SET used_at = ?, used_attempt_hash = ?, used_device_id = ? WHERE code_hash = ? AND used_at IS NULL",
@@ -274,7 +304,36 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         )
         if (changed != 1) throw FalaiException("invalid_code", "Este convite já foi usado.")
 
-        PairResponse(user.id, deviceId, token, user.isAdmin)
+        PairResponse(user.id, deviceId, token, user.isAdmin, user.name)
+    }
+
+    /** O app guarda só um resumo (hash) da identidade do aparelho. Curta demais = ignora. */
+    private fun installKeyHash(key: String?): String? =
+        key?.trim()?.takeIf { it.length in 16..128 }?.let { sha256("install:$it") }
+
+    /** (deviceId, pessoa) do aparelho com essa identidade, se ele ainda vale e a pessoa ainda está na família. */
+    private fun knownDevice(installHash: String): Pair<String, UserDto>? {
+        val row = db.query(
+            """SELECT d.id AS device_id, d.user_id AS user_id FROM devices d JOIN users u ON u.id = d.user_id
+               WHERE d.install_key_hash = ? AND d.revoked_at IS NULL AND u.removed_at IS NULL
+               ORDER BY d.created_at DESC LIMIT 1""",
+            installHash,
+        ).firstOrNull() ?: return null
+        val user = userById(row.string("user_id")) ?: return null
+        return row.string("device_id") to user
+    }
+
+    /**
+     * O app voltou num aparelho conhecido (reinstalado, ou dados apagados): entrega uma chave nova
+     * para o mesmo aparelho, sem convite. Null = aparelho desconhecido.
+     */
+    fun reconnect(req: ReconnectRequest): PairResponse? = db.transaction {
+        val hash = installKeyHash(req.installKey) ?: return@transaction null
+        val (deviceId, user) = knownDevice(hash) ?: return@transaction null
+        val token = newToken()
+        val name = req.deviceName.trim().take(80).ifEmpty { "Aparelho" }
+        db.update("UPDATE devices SET token_hash = ?, name = ? WHERE id = ?", sha256(token), name, deviceId)
+        PairResponse(user.id, deviceId, token, user.isAdmin, user.name, returning = true)
     }
 
     fun authenticate(token: String): AuthedDevice? {
@@ -282,7 +341,7 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
             """SELECT d.id AS device_id, u.id AS user_id, u.name AS name, u.is_admin AS is_admin,
                       u.avatar_media_id AS avatar_media_id
                FROM devices d JOIN users u ON u.id = d.user_id
-               WHERE d.token_hash = ? AND d.revoked_at IS NULL""",
+               WHERE d.token_hash = ? AND d.revoked_at IS NULL AND u.removed_at IS NULL""",
             sha256(token),
         ).firstOrNull() ?: return null
         db.update("UPDATE devices SET last_seen_at = ? WHERE id = ?", clock(), row.string("device_id"))
@@ -292,13 +351,34 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         )
     }
 
-    fun userById(id: String): UserDto? =
-        db.query("SELECT id, name, is_admin, avatar_media_id FROM users WHERE id = ?", id).firstOrNull()
-            ?.let { UserDto(it.string("id"), it.string("name"), it.bool("is_admin"), it.stringOrNull("avatar_media_id")) }
+    private fun rowToUser(it: Row) = UserDto(
+        it.string("id"), it.string("name"), it.bool("is_admin"), it.stringOrNull("avatar_media_id"),
+        removed = it.longOrNull("removed_at") != null,
+    )
 
+    fun userById(id: String): UserDto? =
+        db.query("SELECT id, name, is_admin, avatar_media_id, removed_at FROM users WHERE id = ?", id).firstOrNull()?.let(::rowToUser)
+
+    /** Todo mundo, inclusive quem saiu da família (marcado com removed, para o nome aparecer nas mensagens antigas). */
     fun listUsers(): List<UserDto> =
-        db.query("SELECT id, name, is_admin, avatar_media_id FROM users ORDER BY name COLLATE NOCASE")
-            .map { UserDto(it.string("id"), it.string("name"), it.bool("is_admin"), it.stringOrNull("avatar_media_id")) }
+        db.query("SELECT id, name, is_admin, avatar_media_id, removed_at FROM users ORDER BY name COLLATE NOCASE").map(::rowToUser)
+
+    /**
+     * Só o administrador: tira a pessoa da família. Os aparelhos dela param de funcionar na hora;
+     * as mensagens antigas continuam nas conversas dos outros.
+     */
+    fun removeUser(by: UserDto, userId: String): UserDto = db.transaction {
+        if (!by.isAdmin) throw FalaiException("forbidden", "Só o administrador tira alguém da família.")
+        val u = userById(userId) ?: throw FalaiException("not_found", "Pessoa não encontrada.")
+        if (u.id == by.id) throw FalaiException("invalid", "Você não pode tirar a si mesmo.")
+        if (u.isAdmin) throw FalaiException("invalid", "Não dá para tirar o administrador.")
+        val now = clock()
+        db.update("UPDATE users SET removed_at = ? WHERE id = ? AND removed_at IS NULL", now, userId)
+        db.update("UPDATE devices SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL", now, userId)
+        // Convites para ligar aparelhos a essa pessoa deixam de valer.
+        db.update("UPDATE invites SET expires_at = ? WHERE for_user_id = ? AND used_at IS NULL", 0L, userId)
+        userById(userId)!!
+    }
 
     /** Muda nome e/ou foto. [avatarMediaId] "" = tirar a foto. */
     fun updateProfile(userId: String, name: String?, avatarMediaId: String?): UserDto = db.transaction {
@@ -325,7 +405,8 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
 
     /** Liga um aparelho novo (o navegador) à pessoa, sem convite: ela aprovou pelo celular. */
     fun createLinkedDevice(userId: String, name: String): Pair<String, String> {
-        userById(userId) ?: throw FalaiException("not_found", "Pessoa não encontrada.")
+        val u = userById(userId) ?: throw FalaiException("not_found", "Pessoa não encontrada.")
+        if (u.removed) throw FalaiException("forbidden", "Pessoa fora da família.")
         val token = newToken()
         val deviceId = newId()
         db.execute(
@@ -346,11 +427,18 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         db.transaction {
             if (kind != "direct" && kind != "group") throw FalaiException("invalid", "Tipo de conversa inválido.")
             val members = (otherMemberIds + by.id).distinct()
-            members.forEach { if (userById(it) == null) throw FalaiException("not_found", "Pessoa não encontrada: $it") }
+            members.forEach {
+                val u = userById(it) ?: throw FalaiException("not_found", "Pessoa não encontrada: $it")
+                if (u.removed) throw FalaiException("invalid", "${u.name} não faz mais parte da família.")
+            }
             if (kind == "direct") {
                 if (members.size != 2) throw FalaiException("invalid", "Conversa direta tem exatamente duas pessoas.")
                 // Conversa direta entre as mesmas duas pessoas é única: devolve a que já existe.
-                findDirect(members[0], members[1])?.let { return@transaction it }
+                findDirect(members[0], members[1])?.let {
+                    // Quem tinha apagado a conversa volta a vê-la (vazia, se apagou tudo).
+                    db.update("UPDATE members SET hidden = 0 WHERE conversation_id = ? AND user_id = ?", it.id, by.id)
+                    return@transaction conversationFor(it.id, by.id)!!
+                }
             } else if (members.size < 2) {
                 throw FalaiException("invalid", "Grupo precisa de pelo menos duas pessoas.")
             }
@@ -391,10 +479,41 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         db.query("SELECT user_id FROM members WHERE conversation_id = ? ORDER BY user_id", conversationId)
             .map { it.string("user_id") }
 
+    /** A conversa como [userId] vê: com o ponto até onde ela apagou (se apagou). */
+    fun conversationFor(id: String, userId: String): ConversationDto? {
+        val c = conversation(id) ?: return null
+        val cleared = db.query("SELECT cleared_seq FROM members WHERE conversation_id = ? AND user_id = ?", id, userId)
+            .firstOrNull()?.long("cleared_seq") ?: 0L
+        return if (cleared > 0) c.copy(clearedSeq = cleared) else c
+    }
+
+    /** Conversas que aparecem na lista da pessoa (as apagadas ficam de fora até chegar mensagem nova). */
     fun conversationsOf(userId: String): List<ConversationDto> =
         db.query(
-            "SELECT conversation_id FROM members WHERE user_id = ? ORDER BY conversation_id", userId,
-        ).mapNotNull { conversation(it.string("conversation_id")) }
+            "SELECT conversation_id FROM members WHERE user_id = ? AND hidden = 0 ORDER BY conversation_id", userId,
+        ).mapNotNull { conversationFor(it.string("conversation_id"), userId) }
+
+    /**
+     * "Apagar conversa" (só para mim, em todos os meus aparelhos): some da lista e as mensagens até
+     * agora não voltam mais. Se chegar mensagem nova, a conversa reaparece só com as novas.
+     */
+    fun hideConversation(userId: String, conversationId: String): Long = db.transaction {
+        if (!isMember(conversationId, userId)) throw FalaiException("forbidden", "Você não participa desta conversa.")
+        val last = db.query("SELECT COALESCE(MAX(seq), 0) AS s FROM messages WHERE conversation_id = ?", conversationId).first().long("s")
+        db.update(
+            "UPDATE members SET hidden = 1, cleared_seq = ? WHERE conversation_id = ? AND user_id = ?",
+            last, conversationId, userId,
+        )
+        last
+    }
+
+    /** Mensagem nova numa conversa: quem tinha apagado volta a vê-la. Devolve quem "reapareceu". */
+    fun unhideForNewMessage(conversationId: String): List<String> = db.transaction {
+        val ids = db.query("SELECT user_id FROM members WHERE conversation_id = ? AND hidden = 1", conversationId)
+            .map { it.string("user_id") }
+        if (ids.isNotEmpty()) db.update("UPDATE members SET hidden = 0 WHERE conversation_id = ?", conversationId)
+        ids
+    }
 
     fun isMember(conversationId: String, userId: String): Boolean =
         db.query(
@@ -461,7 +580,7 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         db.query(
             """SELECT m.* FROM messages m
                JOIN members mb ON mb.conversation_id = m.conversation_id AND mb.user_id = ?
-               WHERE m.seq > ?
+               WHERE m.seq > ? AND m.seq > mb.cleared_seq
                ORDER BY m.seq
                LIMIT ?""",
             userId, afterSeq, limit,

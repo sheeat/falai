@@ -10,6 +10,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.response.header
+import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
@@ -161,6 +162,41 @@ private suspend fun ApplicationCall.json(text: String, status: HttpStatusCode = 
 private suspend fun ApplicationCall.error(e: FalaiException, status: HttpStatusCode) =
     json(FalaiJson.encodeToString(ErrorResponse.serializer(), ErrorResponse(e.code, e.message ?: "")), status)
 
+/** Ícones do Falaí (favicon, ícone de "instalar" no computador/celular). */
+private val BRAND_FILES = mapOf(
+    "icon.svg" to ContentType.Image.SVG,
+    "icon-maskable.svg" to ContentType.Image.SVG,
+    "favicon-32.png" to ContentType.Image.PNG,
+    "icon-192.png" to ContentType.Image.PNG,
+    "icon-512.png" to ContentType.Image.PNG,
+    "icon-maskable-512.png" to ContentType.Image.PNG,
+    "apple-touch-icon.png" to ContentType.Image.PNG,
+)
+
+private val brandCache = ConcurrentHashMap<String, ByteArray>()
+
+private fun brandBytes(name: String): ByteArray? = brandCache.getOrPut(name) {
+    FalaiServer::class.java.getResourceAsStream("/web/$name")?.use { it.readBytes() } ?: return null
+}
+
+/** "Instalar" o Falaí no computador (Chrome/Edge) ou na tela inicial do celular, com nome e ícone. */
+private val WEB_MANIFEST = """{
+  "name": "Falaí",
+  "short_name": "Falaí",
+  "description": "O mensageiro da família",
+  "lang": "pt-BR",
+  "start_url": "/web",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ECF3F3",
+  "theme_color": "#136F7A",
+  "icons": [
+    {"src": "/web/icon-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "/web/icon-512.png", "sizes": "512x512", "type": "image/png"},
+    {"src": "/web/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}"""
+
 fun Route.webRoutes(store: Store, links: WebLinks, limiter: FailureLimiter, clientKey: (ApplicationCall) -> String, log: (String) -> Unit) {
     get("/web") {
         call.response.header(HttpHeaders.CacheControl, "no-store")
@@ -172,7 +208,31 @@ fun Route.webRoutes(store: Store, links: WebLinks, limiter: FailureLimiter, clie
                 "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; " +
                 "frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
         )
-        call.respondText(WEB_PAGE, ContentType.Text.Html.withParameter("charset", "utf-8"))
+        call.respondText(WEB_PAGE.replace("{{FALAI_VERSION}}", FALAI_VERSION), ContentType.Text.Html.withParameter("charset", "utf-8"))
+    }
+
+    get("/favicon.ico") {
+        call.response.header(HttpHeaders.CacheControl, "max-age=86400")
+        call.respondBytes(brandBytes("favicon-32.png")!!, ContentType.Image.PNG)
+    }
+    get("/web/manifest.webmanifest") {
+        call.respondText(WEB_MANIFEST, ContentType("application", "manifest+json"))
+    }
+    // Desenhinhos do fundo das conversas (o mesmo do app).
+    get("/web/desenhos.svg") {
+        call.response.header(HttpHeaders.CacheControl, "max-age=86400")
+        call.respondText(Wallpapers.tileSvg(), ContentType.Image.SVG)
+    }
+    get("/web/{file}") {
+        val name = call.parameters["file"].orEmpty()
+        val type = BRAND_FILES[name]
+        val bytes = type?.let { brandBytes(name) }
+        if (bytes == null) {
+            call.respondText("Não encontrado", status = HttpStatusCode.NotFound)
+            return@get
+        }
+        call.response.header(HttpHeaders.CacheControl, "max-age=86400")
+        call.respondBytes(bytes, type)
     }
 
     // Quem sou eu? (o navegador já está ligado ou precisa mostrar o QR Code)
@@ -181,6 +241,15 @@ fun Route.webRoutes(store: Store, links: WebLinks, limiter: FailureLimiter, clie
         if (device == null) {
             call.error(FalaiException("unauthorized", "Navegador não ligado."), HttpStatusCode.Unauthorized)
         } else {
+            // Renova o cookie a cada visita: quem usa sempre nunca precisa ler o QR Code de novo.
+            val cookie = call.request.cookies[WEB_COOKIE]
+            if (!cookie.isNullOrEmpty()) {
+                val secure = if (isHttps(call)) "; Secure" else ""
+                call.response.header(
+                    HttpHeaders.SetCookie,
+                    "$WEB_COOKIE=$cookie; Path=/; Max-Age=${400 * 24 * 3600}; HttpOnly; SameSite=Strict$secure",
+                )
+            }
             call.json(FalaiJson.encodeToString(WebMe.serializer(), WebMe(device.user.id, device.user.name, device.deviceId)))
         }
     }

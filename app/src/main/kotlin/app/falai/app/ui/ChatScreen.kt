@@ -93,6 +93,16 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
     val messages = remember(changes) { client.store.messages(conversationId) }
     var text by rememberSaveable { mutableStateOf("") }
     var menuOpen by remember { mutableStateOf(false) }
+    var chatMenuOpen by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    var confirmRemove by remember { mutableStateOf(false) }
+    val isAdmin = client.account.collectAsState().value?.isAdmin == true
+    val other = remember(changes, summary) {
+        summary?.takeIf { it.kind == "direct" }?.memberIds?.firstOrNull { it != me }?.let { client.store.user(it) }
+    }
+    val otherLeft = other?.removed == true
+    // A conversa foi apagada (por exemplo, no computador): volta para a lista.
+    LaunchedEffect(summary == null) { if (summary == null) onBack() }
     val listState = rememberLazyListState()
 
     // ---------- Anexar ----------
@@ -274,16 +284,35 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
                     summary?.displayName ?: "Conversa", color = Color.White, fontWeight = FontWeight.SemiBold,
                     fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
-                ConnectionBadge(state)
+                if (otherLeft) Text("saiu da família", color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
+                else ConnectionBadge(state)
             }
             // Chamadas: voz e vídeo.
-            val online = state == app.falai.client.ConnectionState.ONLINE
+            val online = state == app.falai.client.ConnectionState.ONLINE && !otherLeft
             val callBusy = ongoingCall != null
             TextButton(enabled = online && !callBusy, onClick = { askCall(false) { calls.start(conversationId, false) } }) {
                 Text("📞", fontSize = 22.sp, color = Color.White.copy(alpha = if (online && !callBusy) 1f else 0.4f))
             }
             TextButton(enabled = online && !callBusy, onClick = { askCall(true) { v -> calls.start(conversationId, v) } }) {
                 Text("🎥", fontSize = 22.sp, color = Color.White.copy(alpha = if (online && !callBusy) 1f else 0.4f))
+            }
+            // Mais opções: apagar a conversa e, para o administrador, tirar a pessoa da família.
+            Box {
+                TextButton(onClick = { chatMenuOpen = true }) {
+                    Text("⋮", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                }
+                DropdownMenu(expanded = chatMenuOpen, onDismissRequest = { chatMenuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("🗑️  Apagar conversa", color = FalaiColors.Error) },
+                        onClick = { chatMenuOpen = false; confirmDelete = true },
+                    )
+                    if (isAdmin && other != null && !other.isAdmin && !other.removed) {
+                        DropdownMenuItem(
+                            text = { Text("🚫  Tirar ${other.name} da família", color = FalaiColors.Error) },
+                            onClick = { chatMenuOpen = false; confirmRemove = true },
+                        )
+                    }
+                }
             }
         }
         // Chamada em andamento nesta conversa (ex.: grupo) e eu fora dela: botão para entrar.
@@ -302,9 +331,10 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
         }
 
         val isGroup = summary?.kind == "group"
+        ChatBackground(Modifier.weight(1f).fillMaxWidth()) {
         LazyColumn(
             state = listState,
-            modifier = Modifier.weight(1f).fillMaxWidth(),
+            modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
@@ -316,6 +346,7 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
                     uploadProgress = progress[m.id],
                 )
             }
+        }
         }
 
         if (recording) {
@@ -405,6 +436,12 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
             }
         }
     }
+    }
+    if (confirmDelete && summary != null) {
+        DeleteConversationDialog(client, summary) { deleted -> confirmDelete = false; if (deleted) onBack() }
+    }
+    if (confirmRemove && other != null) {
+        RemoveFromFamilyDialog(client, other) { confirmRemove = false }
     }
     editingPhoto?.let { photo ->
         ImageEditor(

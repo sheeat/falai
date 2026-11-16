@@ -117,6 +117,13 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
                 db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '3')")
             }
         }
+        if (version < 4) {
+            db.transaction {
+                // 0.9: quem saiu da família continua com o nome nas mensagens antigas.
+                db.execute("ALTER TABLE users ADD COLUMN removed INTEGER NOT NULL DEFAULT 0")
+                db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '4')")
+            }
+        }
     }
 
     // ---------- Configuração ----------
@@ -156,24 +163,31 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
     fun replaceUsers(users: List<UserDto>) = db.transaction {
         db.execute("DELETE FROM users")
         users.forEach {
-            db.execute("INSERT INTO users (id, name, is_admin, avatar_media_id) VALUES (?, ?, ?, ?)", it.id, it.name, it.isAdmin, it.avatarMediaId)
+            db.execute(
+                "INSERT INTO users (id, name, is_admin, avatar_media_id, removed) VALUES (?, ?, ?, ?, ?)",
+                it.id, it.name, it.isAdmin, it.avatarMediaId, it.removed,
+            )
         }
     }
 
     fun upsertUser(u: UserDto) {
         db.execute(
-            "INSERT OR REPLACE INTO users (id, name, is_admin, avatar_media_id) VALUES (?, ?, ?, ?)",
-            u.id, u.name, u.isAdmin, u.avatarMediaId,
+            "INSERT OR REPLACE INTO users (id, name, is_admin, avatar_media_id, removed) VALUES (?, ?, ?, ?, ?)",
+            u.id, u.name, u.isAdmin, u.avatarMediaId, u.removed,
         )
     }
 
-    fun users(): List<UserDto> =
-        db.query("SELECT * FROM users ORDER BY name COLLATE NOCASE")
-            .map { UserDto(it.string("id"), it.string("name"), it.bool("is_admin"), it.stringOrNull("avatar_media_id")) }
+    private fun rowToUser(it: Row) =
+        UserDto(it.string("id"), it.string("name"), it.bool("is_admin"), it.stringOrNull("avatar_media_id"), it.bool("removed"))
+
+    /** Todo mundo, inclusive quem saiu da família (veja [UserDto.removed]). */
+    fun users(): List<UserDto> = db.query("SELECT * FROM users ORDER BY name COLLATE NOCASE").map(::rowToUser)
+
+    /** Quem está na família hoje (para começar conversa, por exemplo). */
+    fun activeUsers(): List<UserDto> = users().filter { !it.removed }
 
     fun user(id: String): UserDto? =
-        db.query("SELECT * FROM users WHERE id = ?", id).firstOrNull()
-            ?.let { UserDto(it.string("id"), it.string("name"), it.bool("is_admin"), it.stringOrNull("avatar_media_id")) }
+        db.query("SELECT * FROM users WHERE id = ?", id).firstOrNull()?.let(::rowToUser)
 
     fun userName(id: String): String? =
         db.query("SELECT name FROM users WHERE id = ?", id).firstOrNull()?.string("name")
@@ -186,6 +200,21 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
         db.execute("DELETE FROM members WHERE conversation_id = ?", c.id)
         c.memberIds.forEach { db.execute("INSERT INTO members (conversation_id, user_id) VALUES (?, ?)", c.id, it) }
     }
+
+    /** Conversa apagada (por mim, aqui ou em outro aparelho): some com ela e com as mensagens. */
+    fun deleteConversation(id: String) = db.transaction {
+        db.execute("DELETE FROM outgoing WHERE message_id IN (SELECT id FROM messages WHERE conversation_id = ?)", id)
+        db.execute("DELETE FROM messages WHERE conversation_id = ?", id)
+        db.execute("DELETE FROM members WHERE conversation_id = ?", id)
+        db.execute("DELETE FROM conversations WHERE id = ?", id)
+    }
+
+    /** Apaga as mensagens até [seq] (a conversa foi apagada e voltou com mensagem nova). */
+    fun clearMessagesUpTo(conversationId: String, seq: Long) {
+        db.execute("DELETE FROM messages WHERE conversation_id = ? AND seq IS NOT NULL AND seq <= ?", conversationId, seq)
+    }
+
+    fun conversationIds(): List<String> = db.query("SELECT id FROM conversations").map { it.string("id") }
 
     private fun memberIds(conversationId: String) =
         db.query("SELECT user_id FROM members WHERE conversation_id = ? ORDER BY user_id", conversationId)

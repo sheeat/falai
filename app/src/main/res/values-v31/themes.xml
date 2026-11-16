@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 12+: tela de abertura com o ícone do Falaí no fundo azul-petróleo. -->
+    <style name="Theme.Falai" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:statusBarColor">@color/falai_primary</item>
+        <item name="android:navigationBarColor">@android:color/white</item>
+        <item name="android:colorAccent">@color/falai_primary</item>
+        <item name="android:colorPrimary">@color/falai_primary</item>
+        <item name="android:windowSplashScreenBackground">@color/falai_primary</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+    </style>
+</resources>

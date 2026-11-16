@@ -3,8 +3,12 @@ package app.falai.app.ui
 import android.content.ClipboardManager
 import android.os.Build
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Column
+import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -34,6 +38,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.size
 import app.falai.client.FalaiClient
 import app.falai.client.FalaiClientException
 import app.falai.protocol.InviteLinks
@@ -44,10 +50,12 @@ import kotlinx.coroutines.launch
  * Com [invite] (veio de um link de convite), só pede o nome; o resto já vem preenchido.
  */
 @Composable
-fun PairScreen(client: FalaiClient, invite: InviteLinks.Parsed? = null) {
-    var server by rememberSaveable(invite) { mutableStateOf(invite?.server ?: "") }
+fun PairScreen(client: FalaiClient, invite: InviteLinks.Parsed? = null, knownServer: String? = null) {
+    val context = LocalContext.current
+    val installKey = remember { app.falai.app.DeviceIdentity.installKey(context) }
+    var server by rememberSaveable(invite, knownServer) { mutableStateOf(invite?.server ?: knownServer ?: "") }
     var code by rememberSaveable(invite) { mutableStateOf(invite?.code ?: "") }
-    var name by rememberSaveable { mutableStateOf("") }
+    var name by rememberSaveable(invite) { mutableStateOf(invite?.name ?: "") }
     var device by rememberSaveable { mutableStateOf("${Build.MANUFACTURER} ${Build.MODEL}".trim()) }
     var showDetails by rememberSaveable(invite) { mutableStateOf(invite == null) }
     var busy by remember { mutableStateOf(false) }
@@ -55,20 +63,63 @@ fun PairScreen(client: FalaiClient, invite: InviteLinks.Parsed? = null) {
     val scope = rememberCoroutineScope()
     val forExistingUser = invite?.forExistingUser == true
 
+    // Este aparelho já foi da família (o app foi instalado de novo)? Entra sozinho, sem convite.
+    val hint = invite?.server ?: knownServer
+    var checking by remember(hint) { mutableStateOf(hint != null && installKey != null) }
+    suspend fun tryReturning(base: String): Boolean {
+        val key = installKey ?: return false
+        val who = try {
+            client.reconnect(base, key, device)
+        } catch (e: Exception) {
+            null
+        } ?: return false
+        android.widget.Toast.makeText(context, if (who.isNotEmpty()) "Bem-vindo de volta, $who! 👋" else "Bem-vindo de volta! 👋", android.widget.Toast.LENGTH_LONG).show()
+        client.start()
+        return true
+    }
+    androidx.compose.runtime.LaunchedEffect(hint) {
+        if (hint != null && installKey != null) {
+            tryReturning(hint)
+            checking = false
+        }
+    }
+    if (checking) {
+        Column(
+            Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.White).padding(32.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            FalaiLogo(96.dp)
+            Spacer(Modifier.height(20.dp))
+            CircularProgressIndicator(color = FalaiColors.Primary)
+            Spacer(Modifier.height(12.dp))
+            Text("Procurando a sua conta…", color = FalaiColors.TextSec)
+        }
+        return
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(androidx.compose.ui.graphics.Color.White)
             .safeDrawingPadding()
             .imePadding()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp, vertical = 32.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Text("Falaí", fontSize = 36.sp, fontWeight = FontWeight.Bold, color = FalaiColors.Primary)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            FalaiLogo(64.dp)
+            Spacer(Modifier.width(12.dp))
+            Text("Falaí", fontSize = 36.sp, fontWeight = FontWeight.Bold, color = FalaiColors.Primary)
+        }
         if (invite != null) {
             Text(
-                if (forExistingUser) "Convite para ligar mais um aparelho seu. É só tocar em Entrar."
-                else "Bem-vindo! 👋\nComo você quer ser chamado na família?",
+                when {
+                    forExistingUser -> "Convite para ligar mais um aparelho seu. É só tocar em Entrar."
+                    invite.name != null -> "Bem-vindo! 👋\nConfira o seu nome e toque em Entrar."
+                    else -> "Bem-vindo! 👋\nComo você quer ser chamado na família?"
+                },
                 fontSize = 18.sp,
             )
         } else {
@@ -136,7 +187,7 @@ fun PairScreen(client: FalaiClient, invite: InviteLinks.Parsed? = null) {
                 error = null
                 scope.launch {
                     try {
-                        client.pair(server, code, device, name.ifBlank { null })
+                        client.pair(server, code, device, name.ifBlank { null }, installKey)
                         client.start()
                     } catch (e: FalaiClientException) {
                         error = e.message
@@ -174,6 +225,17 @@ fun PairScreen(client: FalaiClient, invite: InviteLinks.Parsed? = null) {
                     error = "Não achei um link de convite copiado. Abra o link que você recebeu."
                 }
             }) { Text("📋 Colar o link do convite") }
+            // Já usou o Falaí neste celular e instalou de novo: volta sem convite.
+            if (server.isNotBlank()) {
+                TextButton(enabled = !busy, onClick = {
+                    busy = true
+                    error = null
+                    scope.launch {
+                        if (!tryReturning(server)) error = "Este celular ainda não é conhecido. Peça um convite."
+                        busy = false
+                    }
+                }) { Text("Já usei o Falaí neste celular") }
+            }
             Column(horizontalAlignment = Alignment.Start) {
                 Text(
                     "Testando em casa? No emulador use http://10.0.2.2:8443 e no próprio celular-servidor use http://127.0.0.1:8443.",
@@ -181,5 +243,23 @@ fun PairScreen(client: FalaiClient, invite: InviteLinks.Parsed? = null) {
                 )
             }
         }
+    }
+}
+
+/** O ícone do Falaí (casa-balão com coração), redondo. */
+@Composable
+fun FalaiLogo(size: Dp) {
+    androidx.compose.foundation.layout.Box(
+        Modifier.size(size).clip(androidx.compose.foundation.shape.CircleShape).background(
+            androidx.compose.ui.graphics.Brush.linearGradient(
+                listOf(androidx.compose.ui.graphics.Color(0xFF1B8996), androidx.compose.ui.graphics.Color(0xFF0D5560)),
+            ),
+        ),
+        contentAlignment = Alignment.Center,
+    ) {
+        androidx.compose.foundation.Image(
+            androidx.compose.ui.res.painterResource(app.falai.app.R.drawable.ic_launcher_foreground), null,
+            modifier = Modifier.fillMaxSize(),
+        )
     }
 }

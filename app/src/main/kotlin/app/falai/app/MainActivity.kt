@@ -28,6 +28,9 @@ class MainActivity : ComponentActivity() {
     /** Convite que chegou por link (falai://convite?...), para preencher a tela de entrada. */
     private val pendingInvite = mutableStateOf<InviteLinks.Parsed?>(null)
 
+    /** Endereço do servidor que veio carimbado no arquivo do app (baixado do servidor da família). */
+    private val stampedServer = mutableStateOf<String?>(null)
+
     /** "Atender" tocado no aviso: true = com vídeo, false = só voz. */
     private val answerFromNotification = mutableStateOf<Boolean?>(null)
 
@@ -108,6 +111,13 @@ class MainActivity : ComponentActivity() {
         val client = (application as FalaiApp).client
         readInvite(intent)
         readCallAction(intent)
+        // Primeira vez: o app baixado pelo link já traz o convite (ou o endereço do servidor) dentro.
+        if (client.account.value == null) {
+            app.falai.app.DeviceIdentity.readStamp(this)?.let { st ->
+                if (pendingInvite.value == null) pendingInvite.value = st.invite
+                stampedServer.value = st.server
+            }
+        }
         val calls = (application as FalaiApp).calls
         // Android 13+: pede uma vez para mostrar avisos (chamadas tocando, chamadas perdidas).
         if (android.os.Build.VERSION.SDK_INT >= 33 && client.account.value != null &&
@@ -126,7 +136,7 @@ class MainActivity : ComponentActivity() {
                 androidx.compose.runtime.LaunchedEffect(callUi.incoming != null, callUi.active != null) { followCall(callUi) }
                 androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier) {
                     if (account == null) {
-                        PairScreen(client, pendingInvite.value)
+                        PairScreen(client, pendingInvite.value, stampedServer.value)
                     } else {
                         Navigation(client)
                         app.falai.app.call.CallOverlay(
@@ -144,9 +154,9 @@ class MainActivity : ComponentActivity() {
 /** Navegação simples entre as telas, sem biblioteca extra. */
 @Composable
 private fun Navigation(client: app.falai.client.FalaiClient) {
-    // "lista" | "nova" | "convite" | "ajustes" | "computador" | "chat:<id>"
+    // "lista" | "nova" | "convite" | "ajustes" | "computador" | "fundo" | "chat:<id>"
     var route by rememberSaveable { mutableStateOf("lista") }
-    BackHandler(enabled = route != "lista") { route = if (route == "computador") "ajustes" else "lista" }
+    BackHandler(enabled = route != "lista") { route = if (route == "computador" || route == "fundo") "ajustes" else "lista" }
     when {
         route == "nova" -> NewConversationScreen(
             client,
@@ -156,7 +166,9 @@ private fun Navigation(client: app.falai.client.FalaiClient) {
         route == "convite" -> InviteScreen(client, onBack = { route = "lista" })
         route == "ajustes" -> SettingsScreen(
             client, onBack = { route = "lista" }, onInvite = { route = "convite" }, onWebLink = { route = "computador" },
+            onWallpaper = { route = "fundo" },
         )
+        route == "fundo" -> app.falai.app.ui.WallpaperScreen(onBack = { route = "ajustes" })
         route == "computador" -> WebLinkScreen(client, onBack = { route = "ajustes" })
         route.startsWith("chat:") -> ChatScreen(
             client,

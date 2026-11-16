@@ -117,12 +117,12 @@ class FalaiClient(
      * Troca o código de convite por uma conta neste aparelho. Se a internet oscilar, tenta de novo
      * sozinho; o servidor reconhece a repetição e o convite não se perde.
      */
-    suspend fun pair(serverUrl: String, code: String, deviceName: String, userName: String?): Account =
+    suspend fun pair(serverUrl: String, code: String, deviceName: String, userName: String?, installKey: String? = null): Account =
         withContext(Dispatchers.IO) {
             val base = normalizeUrl(serverUrl)
             val cleanCode = code.trim()
             val attemptId = pairAttempts.getOrPut(cleanCode.uppercase().filter { it.isLetterOrDigit() }) { UUID.randomUUID().toString() }
-            val body = FalaiJson.encodeToString(PairRequest.serializer(), PairRequest(cleanCode, deviceName, userName, attemptId))
+            val body = FalaiJson.encodeToString(PairRequest.serializer(), PairRequest(cleanCode, deviceName, userName, attemptId, installKey))
             val req = Request.Builder()
                 .url("$base/api/pair")
                 .post(body.toRequestBody("application/json".toMediaType()))
@@ -144,11 +144,7 @@ class FalaiClient(
                         throw FalaiClientException(err?.error ?: "http_${r.code}", err?.message ?: "Erro do servidor (${r.code}).")
                     }
                     val p = FalaiJson.decodeFromString(PairResponse.serializer(), text)
-                    val acc = Account(base, p.token, p.userId, p.deviceId, p.isAdmin)
-                    store.saveAccount(acc)
-                    _me.value = acc
-                    bump()
-                    acc
+                    saveAccountFrom(base, p)
                 }
             }
             throw FalaiClientException(
@@ -156,6 +152,48 @@ class FalaiClient(
                 "Não consegui falar com o servidor (${lastError?.message ?: "sem resposta"}). Confira o endereço e a internet e tente de novo com o mesmo código.",
             )
         }
+
+    private fun saveAccountFrom(base: String, p: PairResponse): Account {
+        val acc = Account(base, p.token, p.userId, p.deviceId, p.isAdmin)
+        store.saveAccount(acc)
+        p.userName?.let { store.upsertUser(UserDto(p.userId, it, p.isAdmin)) }
+        _me.value = acc
+        bump()
+        return acc
+    }
+
+    /**
+     * O app foi instalado de novo num aparelho que o servidor já conhece ([installKey] igual):
+     * entra direto na conta da pessoa, sem convite. Devolve o nome da pessoa, ou null se o
+     * servidor não conhece este aparelho (aí precisa de convite).
+     */
+    suspend fun reconnect(serverUrl: String, installKey: String, deviceName: String): String? = withContext(Dispatchers.IO) {
+        val base = normalizeUrl(serverUrl)
+        val body = FalaiJson.encodeToString(
+            app.falai.protocol.ReconnectRequest.serializer(), app.falai.protocol.ReconnectRequest(installKey, deviceName),
+        )
+        val req = Request.Builder().url("$base/api/reconnect").post(body.toRequestBody("application/json".toMediaType())).build()
+        val resp = try {
+            mediaHttp.newCall(req).execute()
+        } catch (e: IOException) {
+            throw FalaiClientException("network", "Não consegui falar com o servidor. Confira a internet.")
+        }
+        resp.use { r ->
+            val text = r.body?.string().orEmpty()
+            when {
+                r.code == 404 -> null
+                !r.isSuccessful -> {
+                    val err = runCatching { FalaiJson.decodeFromString(ErrorResponse.serializer(), text) }.getOrNull()
+                    throw FalaiClientException(err?.error ?: "http_${r.code}", err?.message ?: "Erro do servidor (${r.code}).")
+                }
+                else -> {
+                    val p = FalaiJson.decodeFromString(PairResponse.serializer(), text)
+                    saveAccountFrom(base, p)
+                    p.userName ?: ""
+                }
+            }
+        }
+    }
 
     // ---------- Arquivo do app (para quem for convidado baixar) ----------
 
@@ -320,7 +358,13 @@ class FalaiClient(
         when (f) {
             is HelloFrame -> {
                 store.upsertUser(f.user)
-                f.conversations.forEach(store::upsertConversation)
+                // A lista do servidor é a verdade: conversa apagada em outro aparelho some daqui também.
+                val keep = f.conversations.map { it.id }.toSet()
+                store.conversationIds().filter { it !in keep }.forEach(store::deleteConversation)
+                f.conversations.forEach {
+                    store.upsertConversation(it)
+                    it.clearedSeq?.let { s -> store.clearMessagesUpTo(it.id, s) }
+                }
                 if (f.user.isAdmin != acc.isAdmin) {
                     val updated = acc.copy(isAdmin = f.user.isAdmin)
                     store.saveAccount(updated)
@@ -344,6 +388,7 @@ class FalaiClient(
             is SyncDoneFrame -> store.setSyncedSeq(maxOf(store.syncedSeq(), f.lastSeq))
             is ConversationFrame -> {
                 store.upsertConversation(f.conversation)
+                f.conversation.clearedSeq?.let { store.clearMessagesUpTo(f.conversation.id, it) }
                 bump()
                 f.requestId?.let { pendingRequests.remove(it)?.complete(f) }
                 // Conversa nova pode trazer gente que este aparelho ainda não conhece.
@@ -357,6 +402,11 @@ class FalaiClient(
                 pendingRequests.remove(f.requestId)?.complete(f)
             }
             is InviteFrame -> pendingRequests.remove(f.requestId)?.complete(f)
+            is app.falai.protocol.ConversationHiddenFrame -> {
+                store.deleteConversation(f.conversationId)
+                bump()
+                f.requestId?.let { pendingRequests.remove(it)?.complete(f) }
+            }
             is PongFrame -> pendingRequests.remove(f.requestId)?.complete(f)
             is app.falai.protocol.WebApprovedFrame -> pendingRequests.remove(f.requestId)?.complete(f)
             is UserUpdatedFrame -> {
@@ -446,9 +496,23 @@ class FalaiClient(
     }
 
     /** Gera um código de convite. [forUserId] preenchido = mais um aparelho para essa pessoa. */
-    suspend fun createInvite(forUserId: String? = null): InviteFrame {
+    suspend fun createInvite(forUserId: String? = null, name: String? = null): InviteFrame {
         val id = UUID.randomUUID().toString()
-        return request(id, CreateInviteFrame(id, forUserId)) as InviteFrame
+        return request(id, CreateInviteFrame(id, forUserId, name?.trim()?.takeIf { it.isNotEmpty() })) as InviteFrame
+    }
+
+    /** "Apagar conversa": some da lista em todos os meus aparelhos (para os outros nada muda). */
+    suspend fun hideConversation(conversationId: String) {
+        val id = UUID.randomUUID().toString()
+        request(id, app.falai.protocol.HideConversationFrame(id, conversationId))
+        store.deleteConversation(conversationId)
+        bump()
+    }
+
+    /** Só o administrador: tira a pessoa da família (os aparelhos dela são desligados). */
+    suspend fun removeUser(userId: String): UserDto {
+        val id = UUID.randomUUID().toString()
+        return (request(id, app.falai.protocol.RemoveUserFrame(id, userId)) as UserUpdatedFrame).user
     }
 
     private val _publicBase = MutableStateFlow<String?>(null)

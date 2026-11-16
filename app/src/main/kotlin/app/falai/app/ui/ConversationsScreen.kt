@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -23,6 +25,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -49,10 +53,7 @@ fun ConversationsScreen(
     val lastError by client.lastError.collectAsState()
     val me = account?.userId ?: return
     val list = remember(changes) { client.store.conversationSummaries(me) }
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val appVersion = remember {
-        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "?"
-    }
+    var deleting by remember { mutableStateOf<ConversationSummary?>(null) }
 
     Box(Modifier.fillMaxSize().background(Color.White)) {
         Column(Modifier.fillMaxSize()) {
@@ -65,6 +66,10 @@ fun ConversationsScreen(
                     .padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 10.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    androidx.compose.foundation.Image(
+                        androidx.compose.ui.res.painterResource(app.falai.app.R.drawable.ic_launcher_foreground), null,
+                        modifier = Modifier.padding(end = 2.dp).size(40.dp),
+                    )
                     Text("Falaí", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.weight(1f))
                     if (account?.isAdmin == true) {
@@ -74,8 +79,6 @@ fun ConversationsScreen(
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     ConnectionBadge(state)
-                    Spacer(Modifier.weight(1f))
-                    Text("v$appVersion", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
                 }
             }
 
@@ -109,7 +112,7 @@ fun ConversationsScreen(
             } else {
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(list, key = { it.id }) { c ->
-                        ConversationRow(client, c, me, onClick = { onOpen(c.id) })
+                        ConversationRow(client, c, me, onClick = { onOpen(c.id) }, onLongClick = { deleting = c })
                         HorizontalDivider(color = FalaiColors.Divider, modifier = Modifier.padding(start = 76.dp))
                     }
                 }
@@ -123,12 +126,14 @@ fun ConversationsScreen(
             modifier = Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(20.dp),
         ) { Text("Nova conversa") }
     }
+    deleting?.let { c -> DeleteConversationDialog(client, c) { deleting = null } }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun ConversationRow(client: FalaiClient, c: ConversationSummary, me: String, onClick: () -> Unit) {
+private fun ConversationRow(client: FalaiClient, c: ConversationSummary, me: String, onClick: () -> Unit, onLongClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
+        Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Avatar(c.displayName, client = client, mediaId = c.avatarMediaId)
