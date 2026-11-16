@@ -17,6 +17,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
@@ -532,5 +533,29 @@ class FalaiClientTest {
         ana.reconnectNow(force = true)
         eventually("Ana saber o endereço") { ana.publicBase.value == "https://falai.falaifamilia.net" }
         assertEquals("https://falai.falaifamilia.net/convite/", chefe.createInvite().link!!.substringBeforeLast('/') + "/")
+    }
+
+    @Test
+    fun `perfil - trocar nome e foto e a familia ve na hora`() = runBlocking {
+        val (chefe, ana, conv) = family()
+        val chefeId = chefe.account.value!!.userId
+        val foto = randomFile("eu.jpg", 40_000, 31)
+        val u = chefe.updateProfile(name = "  Edson  ", photo = foto)
+        assertEquals("Edson", u.name)
+        val avatar = assertNotNull(u.avatarMediaId)
+        // Ana recebe a mudança sem precisar reconectar.
+        eventually("Ana ver o nome novo") { ana.store.userName(chefeId) == "Edson" }
+        eventually("Ana ver a foto") { ana.store.user(chefeId)?.avatarMediaId == avatar }
+        assertEquals(avatar, ana.store.conversationSummaries(ana.account.value!!.userId).first { it.id == conv }.avatarMediaId)
+        // E consegue baixar a foto, idêntica.
+        kotlin.test.assertContentEquals(foto.readBytes(), ana.avatarFile(avatar).readBytes())
+        // Nome vazio não pode.
+        val vazio = runCatching { chefe.updateProfile(name = "   ") }.exceptionOrNull()
+        assertTrue(vazio is FalaiClientException && vazio.code == "invalid", "$vazio")
+        // Tirar a foto.
+        assertEquals(null, chefe.updateProfile(removePhoto = true).avatarMediaId)
+        eventually("Ana ver sem foto") { ana.store.user(chefeId)?.avatarMediaId == null }
+        // Outro aparelho que entra depois já vê o nome certo.
+        assertEquals("Edson", chefe.store.userName(chefeId))
     }
 }

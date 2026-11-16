@@ -94,6 +94,9 @@ class Hub {
         }
     }
 
+    /** Para todos os aparelhos conectados (ex.: alguém mudou a foto). */
+    fun deliverAll(frame: ServerFrame, exceptDeviceId: String? = null) = deliver(byUser.keys.toList(), frame, exceptDeviceId)
+
     fun onlineDevices(userId: String): Int = byUser[userId]?.size ?: 0
 
     /** Total de aparelhos conectados agora (para a tela do servidor). */
@@ -298,6 +301,7 @@ class FalaiServer(
         is CreateInviteFrame -> f.requestId
         is PingFrame -> f.requestId
         is SetPublicAddressFrame -> f.requestId
+        is UpdateProfileFrame -> f.requestId
         is SyncFrame -> null
     }
 
@@ -305,6 +309,14 @@ class FalaiServer(
         val device = conn.device
         when (f) {
             is PingFrame -> reply(PongFrame(f.requestId))
+
+            is UpdateProfileFrame -> {
+                val u = store.updateProfile(device.user.id, f.name, f.avatarMediaId)
+                log("Perfil atualizado: ${u.name}")
+                reply(UserUpdatedFrame(f.requestId, u))
+                // Todos os outros aparelhos (da família toda) veem o nome/foto novos.
+                hub.deliverAll(UserUpdatedFrame(null, u), exceptDeviceId = device.deviceId)
+            }
 
             is SetPublicAddressFrame -> {
                 if (!device.user.isAdmin) throw FalaiException("forbidden", "Só o administrador muda o endereço.")

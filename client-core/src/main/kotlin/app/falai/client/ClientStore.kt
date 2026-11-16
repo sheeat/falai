@@ -52,6 +52,8 @@ data class ConversationSummary(
     val lastAuthorId: String?,
     val lastAt: Long?,
     val lastStatus: MessageStatus?,
+    /** Conversa direta: a foto da outra pessoa (id do arquivo), se tiver. */
+    val avatarMediaId: String? = null,
 )
 
 /**
@@ -108,6 +110,13 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
                 db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '2')")
             }
         }
+        if (version < 3) {
+            db.transaction {
+                // M5: foto de perfil.
+                db.execute("ALTER TABLE users ADD COLUMN avatar_media_id TEXT")
+                db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '3')")
+            }
+        }
     }
 
     // ---------- Configuração ----------
@@ -146,16 +155,25 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
 
     fun replaceUsers(users: List<UserDto>) = db.transaction {
         db.execute("DELETE FROM users")
-        users.forEach { db.execute("INSERT INTO users (id, name, is_admin) VALUES (?, ?, ?)", it.id, it.name, it.isAdmin) }
+        users.forEach {
+            db.execute("INSERT INTO users (id, name, is_admin, avatar_media_id) VALUES (?, ?, ?, ?)", it.id, it.name, it.isAdmin, it.avatarMediaId)
+        }
     }
 
     fun upsertUser(u: UserDto) {
-        db.execute("INSERT OR REPLACE INTO users (id, name, is_admin) VALUES (?, ?, ?)", u.id, u.name, u.isAdmin)
+        db.execute(
+            "INSERT OR REPLACE INTO users (id, name, is_admin, avatar_media_id) VALUES (?, ?, ?, ?)",
+            u.id, u.name, u.isAdmin, u.avatarMediaId,
+        )
     }
 
     fun users(): List<UserDto> =
         db.query("SELECT * FROM users ORDER BY name COLLATE NOCASE")
-            .map { UserDto(it.string("id"), it.string("name"), it.bool("is_admin")) }
+            .map { UserDto(it.string("id"), it.string("name"), it.bool("is_admin"), it.stringOrNull("avatar_media_id")) }
+
+    fun user(id: String): UserDto? =
+        db.query("SELECT * FROM users WHERE id = ?", id).firstOrNull()
+            ?.let { UserDto(it.string("id"), it.string("name"), it.bool("is_admin"), it.stringOrNull("avatar_media_id")) }
 
     fun userName(id: String): String? =
         db.query("SELECT name FROM users WHERE id = ?", id).firstOrNull()?.string("name")
@@ -189,6 +207,7 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
                 "SELECT * FROM messages WHERE conversation_id = ? AND seq IS NULL ORDER BY rowid DESC LIMIT 1", id,
             ).firstOrNull()
             val shown = newestPending ?: last
+            val other = if (kind == "direct") members.firstOrNull { it != myUserId }?.let(::user) else null
             val name = if (kind == "direct") {
                 members.firstOrNull { it != myUserId }?.let { userName(it) } ?: "Conversa"
             } else {
@@ -203,6 +222,7 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
                 lastAuthorId = shown?.string("author_id"),
                 lastAt = shown?.long("created_at") ?: c.long("created_at"),
                 lastStatus = shown?.let { MessageStatus.valueOf(it.string("status")) },
+                avatarMediaId = other?.avatarMediaId,
             )
         }.sortedByDescending { it.lastAt ?: 0 }
     }

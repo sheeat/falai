@@ -53,7 +53,13 @@ data class ErrorResponse(val error: String, val message: String)
 // ---------- Objetos compartilhados ----------
 
 @Serializable
-data class UserDto(val id: String, val name: String, val isAdmin: Boolean)
+data class UserDto(
+    val id: String,
+    val name: String,
+    val isAdmin: Boolean,
+    /** Foto de perfil (um arquivo já enviado ao servidor), ou null. */
+    val avatarMediaId: String? = null,
+)
 
 @Serializable
 data class ConversationDto(
@@ -200,6 +206,10 @@ data class CreateInviteFrame(
 @Serializable @SerialName("ping")
 data class PingFrame(val requestId: String) : ClientFrame
 
+/** Muda o próprio nome e/ou a foto. [avatarMediaId] = "" tira a foto; null não mexe. */
+@Serializable @SerialName("update_profile")
+data class UpdateProfileFrame(val requestId: String, val name: String? = null, val avatarMediaId: String? = null) : ClientFrame
+
 /** Só o administrador: informa o endereço do Falaí na internet (ex.: falai.falaifamilia.net). */
 @Serializable @SerialName("set_public_address")
 data class SetPublicAddressFrame(val requestId: String, val address: String) : ClientFrame
@@ -246,6 +256,10 @@ data class InviteFrame(
     /** Link para mandar pelo WhatsApp (https://.../convite/CODIGO). Null se o servidor ainda não sabe o próprio endereço. */
     val link: String? = null,
 ) : ServerFrame
+
+/** Alguém mudou o nome ou a foto. Vai para todos os aparelhos conectados (e responde a [UpdateProfileFrame]). */
+@Serializable @SerialName("user_updated")
+data class UserUpdatedFrame(val requestId: String?, val user: UserDto) : ServerFrame
 
 /** Resposta a [SetPublicAddressFrame]. */
 @Serializable @SerialName("public_address")

@@ -25,6 +25,9 @@ import app.falai.protocol.SyncBatchFrame
 import app.falai.protocol.SyncDoneFrame
 import app.falai.protocol.SyncFrame
 import app.falai.protocol.UsersFrame
+import app.falai.protocol.UpdateProfileFrame
+import app.falai.protocol.UserUpdatedFrame
+import app.falai.protocol.UserDto
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -352,6 +355,11 @@ class FalaiClient(
             }
             is InviteFrame -> pendingRequests.remove(f.requestId)?.complete(f)
             is PongFrame -> pendingRequests.remove(f.requestId)?.complete(f)
+            is UserUpdatedFrame -> {
+                store.upsertUser(f.user)
+                bump()
+                f.requestId?.let { pendingRequests.remove(it)?.complete(f) }
+            }
             is PublicAddressFrame -> {
                 _publicBase.value = f.publicBase
                 pendingRequests.remove(f.requestId)?.complete(f)
@@ -601,11 +609,13 @@ class FalaiClient(
             } catch (e: IOException) {
                 throw FalaiClientException("network", "Sem conexão para baixar o arquivo.")
             }
-            resp.use { r ->
+            // Fotos de perfil não vêm com o SHA na mensagem: o servidor manda no cabeçalho.
+            val expected = resp.use { r ->
                 if (!r.isSuccessful) throw FalaiClientException("http_${r.code}", "Não consegui baixar o arquivo (${r.code}).")
                 r.body!!.byteStream().use { input -> tmp.outputStream().use { input.copyTo(it, 256 * 1024) } }
+                att.sha256.ifEmpty { r.header("X-Content-SHA256").orEmpty() }
             }
-            if (sha256Hex(tmp) != att.sha256) {
+            if (expected.isEmpty() || sha256Hex(tmp) != expected) {
                 tmp.delete()
                 throw FalaiClientException("hash_mismatch", "O arquivo chegou corrompido. Tente de novo.")
             }
@@ -616,6 +626,61 @@ class FalaiClient(
         } finally {
             lock.unlock()
         }
+    }
+
+    // ---------- Perfil ----------
+
+    /** Foto de perfil de alguém, baixada (e guardada) se precisar. */
+    suspend fun avatarFile(mediaId: String): java.io.File =
+        mediaFile(app.falai.protocol.AttachmentDto(mediaId, "image", "image/jpeg", "perfil.jpg", 0, ""))
+
+    /** Envia um arquivo pequeno direto (sem fila), ex.: foto de perfil. Devolve o id no servidor. */
+    private fun uploadDirect(file: java.io.File, mime: String): String {
+        val acc = store.account() ?: throw FalaiClientException("not_paired", "Aparelho não pareado.")
+        val json = "application/json".toMediaType()
+        val parseStatus = { t: String -> FalaiJson.decodeFromString(app.falai.protocol.MediaStatus.serializer(), t) }
+        val body = FalaiJson.encodeToString(
+            app.falai.protocol.MediaCreateRequest.serializer(),
+            app.falai.protocol.MediaCreateRequest(file.length(), sha256Hex(file), mime, file.name),
+        )
+        var status = call(authed(Request.Builder().url("${acc.serverUrl}/api/media").post(body.toRequestBody(json)), acc).build(), parseStatus)
+        java.io.RandomAccessFile(file, "r").use { raf ->
+            val buf = ByteArray(app.falai.protocol.MEDIA_CHUNK_BYTES)
+            while (!status.complete) {
+                raf.seek(status.received)
+                val want = minOf(buf.size.toLong(), status.size - status.received).toInt()
+                raf.readFully(buf, 0, want)
+                val req = authed(
+                    Request.Builder()
+                        .url("${acc.serverUrl}/api/media/${status.mediaId}?offset=${status.received}")
+                        .put(buf.toRequestBody("application/octet-stream".toMediaType(), 0, want)),
+                    acc,
+                ).build()
+                status = call(req, parseStatus)
+            }
+        }
+        // A foto já está aqui: guarda como baixada, para não baixar de volta.
+        store.setLocalMedia(status.mediaId, file.path)
+        return status.mediaId
+    }
+
+    /**
+     * Muda o meu nome e/ou a minha foto. [photo] = nova foto (JPEG já reduzido);
+     * [removePhoto] = tirar a foto. Os outros aparelhos da família veem na hora.
+     */
+    suspend fun updateProfile(name: String? = null, photo: java.io.File? = null, removePhoto: Boolean = false): UserDto {
+        val mediaId = when {
+            photo != null -> try {
+                withContext(Dispatchers.IO) { uploadDirect(photo, "image/jpeg") }
+            } catch (e: IOException) {
+                throw FalaiClientException("network", "Sem conexão para enviar a foto.")
+            }
+            removePhoto -> ""
+            else -> null
+        }
+        val id = UUID.randomUUID().toString()
+        val f = request(id, UpdateProfileFrame(id, name?.trim(), mediaId)) as UserUpdatedFrame
+        return f.user
     }
 
     companion object {
