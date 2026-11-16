@@ -28,6 +28,29 @@ class MainActivity : ComponentActivity() {
     /** Convite que chegou por link (falai://convite?...), para preencher a tela de entrada. */
     private val pendingInvite = mutableStateOf<InviteLinks.Parsed?>(null)
 
+    /** "Atender" tocado no aviso: true = com vídeo, false = só voz. */
+    private val answerFromNotification = mutableStateOf<Boolean?>(null)
+
+    private fun readCallAction(intent: Intent?) {
+        if (intent?.action == app.falai.app.call.CallNotifications.ACTION_ANSWER) {
+            answerFromNotification.value = intent.getBooleanExtra(app.falai.app.call.CallNotifications.EXTRA_VIDEO, false)
+            app.falai.app.call.CallNotifications.cancelIncoming(this)
+        }
+    }
+
+    private val askNotifications = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { }
+
+    /** Celular bloqueado: a chamada aparece por cima; durante a chamada, a tela não apaga sozinha. */
+    private fun followCall(ui: app.falai.app.call.CallUi) {
+        val ringingOrInCall = ui.incoming != null || ui.active != null
+        if (android.os.Build.VERSION.SDK_INT >= 27) {
+            setShowWhenLocked(ringingOrInCall)
+            setTurnScreenOn(ui.incoming != null)
+        }
+        if (ui.active != null) window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
     private fun readInvite(intent: Intent?) {
         val data = intent?.dataString ?: return
         val parsed = InviteLinks.parse(data) ?: return
@@ -59,12 +82,24 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         readInvite(intent)
+        readCallAction(intent)
     }
 
     override fun onResume() {
         super.onResume()
         // Abriu o app: não espera o próximo intervalo de tentativa, conecta (e envia a fila) na hora.
-        (application as FalaiApp).client.reconnectNow()
+        val falai = application as FalaiApp
+        falai.client.reconnectNow()
+        falai.calls.appVisible = true
+        // "Sempre conectado": as chamadas tocam mesmo com o app fechado.
+        if (falai.client.account.value != null) {
+            app.falai.app.call.CallService.setStandby(this, app.falai.app.call.KeepConnected.isOn(this))
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        (application as FalaiApp).calls.appVisible = false
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -72,13 +107,34 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         val client = (application as FalaiApp).client
         readInvite(intent)
+        readCallAction(intent)
+        val calls = (application as FalaiApp).calls
+        // Android 13+: pede uma vez para mostrar avisos (chamadas tocando, chamadas perdidas).
+        if (android.os.Build.VERSION.SDK_INT >= 33 && client.account.value != null &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            val prefs = getSharedPreferences("falai", MODE_PRIVATE)
+            if (!prefs.getBoolean("pediu_avisos", false)) {
+                prefs.edit().putBoolean("pediu_avisos", true).apply()
+                askNotifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
         setContent {
             FalaiTheme {
                 val account by client.account.collectAsState()
-                if (account == null) {
-                    PairScreen(client, pendingInvite.value)
-                } else {
-                    Navigation(client)
+                val callUi by calls.ui.collectAsState()
+                androidx.compose.runtime.LaunchedEffect(callUi.incoming != null, callUi.active != null) { followCall(callUi) }
+                androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier) {
+                    if (account == null) {
+                        PairScreen(client, pendingInvite.value)
+                    } else {
+                        Navigation(client)
+                        app.falai.app.call.CallOverlay(
+                            client, calls,
+                            answerNow = answerFromNotification.value,
+                            onAnswerHandled = { answerFromNotification.value = null },
+                        )
+                    }
                 }
             }
         }

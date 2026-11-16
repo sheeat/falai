@@ -12,8 +12,8 @@ android {
         applicationId = "app.falai"
         minSdk = 28
         targetSdk = 36
-        versionCode = 14
-        versionName = "0.7.0"
+        versionCode = 17
+        versionName = "0.8.2"
     }
 
     buildTypes {
@@ -60,6 +60,8 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.0")
+    // Chamadas de voz e vídeo (WebRTC do Google, empacotado pela Stream; grátis, código aberto).
+    implementation("io.getstream:stream-webrtc-android:1.3.10")
     // Leitor de QR Code (Falaí no computador).
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 }
