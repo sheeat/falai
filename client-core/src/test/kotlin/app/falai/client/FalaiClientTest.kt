@@ -520,4 +520,17 @@ class FalaiClientTest {
         // Versão nova: envia.
         assertEquals(5L, chefe.publishAppIfNewer(outro, 7, "0.4.1")?.size)
     }
+
+    @Test
+    fun `admin salva o endereco da internet e os outros aparelhos ficam sabendo`() = runBlocking {
+        val (chefe, ana, _) = family()
+        assertEquals(null, chefe.publicBase.value)
+        assertEquals("https://falai.falaifamilia.net", chefe.setPublicAddress("falai.falaifamilia.net"))
+        assertEquals("https://falai.falaifamilia.net", chefe.publicBase.value)
+        val erro = runCatching { ana.setPublicAddress("falai.outro.net") }.exceptionOrNull()
+        assertTrue(erro is FalaiClientException && erro.code == "forbidden", "$erro")
+        ana.reconnectNow(force = true)
+        eventually("Ana saber o endereço") { ana.publicBase.value == "https://falai.falaifamilia.net" }
+        assertEquals("https://falai.falaifamilia.net/convite/", chefe.createInvite().link!!.substringBeforeLast('/') + "/")
+    }
 }

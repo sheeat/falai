@@ -259,6 +259,7 @@ class FalaiServer(
                     deviceId = device.deviceId,
                     conversations = store.conversationsOf(device.user.id),
                     lastSeq = store.lastSeqFor(device.user.id),
+                    publicBase = invites.publicBase(),
                 )
             )
             for (frame in incoming) {
@@ -296,6 +297,7 @@ class FalaiServer(
         is ListUsersFrame -> f.requestId
         is CreateInviteFrame -> f.requestId
         is PingFrame -> f.requestId
+        is SetPublicAddressFrame -> f.requestId
         is SyncFrame -> null
     }
 
@@ -303,6 +305,13 @@ class FalaiServer(
         val device = conn.device
         when (f) {
             is PingFrame -> reply(PongFrame(f.requestId))
+
+            is SetPublicAddressFrame -> {
+                if (!device.user.isAdmin) throw FalaiException("forbidden", "Só o administrador muda o endereço.")
+                val base = invites.setAddress(f.address)
+                    ?: throw FalaiException("invalid", "Endereço inválido. Exemplo: falai.seudominio.com")
+                reply(PublicAddressFrame(f.requestId, base))
+            }
 
             is SendFrame -> {
                 val stored = store.storeMessage(device, f)

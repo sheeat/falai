@@ -19,6 +19,10 @@ data class StoredMessage(val message: MessageDto, val isNew: Boolean)
  * Toda a persistência do servidor. A lógica SQL fica aqui, igual no PC e no Android.
  */
 /** Por quanto tempo um pareamento pode ser repetido com o mesmo id de tentativa. */
+/** Quanto tempo um convite vale (7 dias: dá tempo de a pessoa ver o WhatsApp e instalar). */
+const val INVITE_VALID_MS = 7 * 24 * 3600_000L
+
+/** Por quanto tempo um pareamento pode ser repetido com o mesmo id de tentativa. */
 const val PAIR_RETRY_WINDOW_MS = 30 * 60_000L
 
 class Store(private val db: Db, private val clock: () -> Long = System::currentTimeMillis) {
@@ -192,7 +196,7 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         code to expires
     }
 
-    fun createInvite(by: UserDto, forUserId: String?, validForMs: Long = 24 * 3600_000L): Pair<String, Long> {
+    fun createInvite(by: UserDto, forUserId: String?, validForMs: Long = INVITE_VALID_MS): Pair<String, Long> {
         if (!by.isAdmin) throw FalaiException("forbidden", "Só o administrador cria convites.")
         if (forUserId != null && userById(forUserId) == null) {
             throw FalaiException("not_found", "Pessoa não encontrada.")

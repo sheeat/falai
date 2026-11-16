@@ -50,6 +50,23 @@ class InviteSupport(private val store: Store, private val mediaDir: File, privat
         }
     }
 
+    /**
+     * O administrador informa o endereço (aceita "falai.x.net", "https://falai.x.net/" etc.).
+     * Devolve a base (https://...) ou null se o endereço não parecer válido.
+     */
+    fun setAddress(input: String): String? {
+        val h = input.trim().lowercase()
+            .removePrefix("https://").removePrefix("http://")
+            .substringBefore('/').substringBefore(':').trim()
+        if (!HOST.matches(h) || h == "localhost" || !h.contains('.') || h.all { it.isDigit() || it == '.' }) return null
+        if (h != host) {
+            host = h
+            store.setMeta("public_host", h)
+            log("Endereço público definido: $h")
+        }
+        return publicBase()
+    }
+
     fun linkFor(code: String): String? = publicBase()?.let { InviteLinks.page(it, code) }
 
     // ---------- Arquivo do app ----------
@@ -103,10 +120,10 @@ internal fun invitePage(
               <a class="btn" href="${esc(intentUri)}">Abrir o convite no Falaí</a>
               <a class="small" href="${esc(appUri)}">Não abriu? Toque aqui</a>
             </div></div>
-            <p class="code">Código: <b>${esc(code.chunked(5).joinToString(" "))}</b><br>Vale por 24 horas e só pode ser usado uma vez.</p>
+            <p class="code">Código: <b>${esc(code.chunked(5).joinToString(" "))}</b><br>Vale por 7 dias e é só seu: depois de usado, não serve para mais ninguém.</p>
         """
         "used" -> "<h1>Este convite já foi usado</h1><p>Peça um convite novo para quem te convidou.</p>"
-        "expired" -> "<h1>Este convite venceu</h1><p>O convite vale 24 horas. Peça um novo para quem te convidou.</p>"
+        "expired" -> "<h1>Este convite venceu</h1><p>O convite vale 7 dias. Peça um novo para quem te convidou.</p>"
         else -> "<h1>Convite não encontrado</h1><p>Confira se o link chegou inteiro, ou peça um novo.</p>"
     }
     return """<!doctype html>

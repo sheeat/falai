@@ -200,6 +200,10 @@ data class CreateInviteFrame(
 @Serializable @SerialName("ping")
 data class PingFrame(val requestId: String) : ClientFrame
 
+/** Só o administrador: informa o endereço do Falaí na internet (ex.: falai.falaifamilia.net). */
+@Serializable @SerialName("set_public_address")
+data class SetPublicAddressFrame(val requestId: String, val address: String) : ClientFrame
+
 // ---------- Servidor -> cliente ----------
 
 @Serializable
@@ -212,6 +216,8 @@ data class HelloFrame(
     val deviceId: String,
     val conversations: List<ConversationDto>,
     val lastSeq: Long,
+    /** Endereço do servidor na internet (ex.: https://falai.falaifamilia.net), se já for conhecido. */
+    val publicBase: String? = null,
 ) : ServerFrame
 
 @Serializable @SerialName("ack")
@@ -240,6 +246,10 @@ data class InviteFrame(
     /** Link para mandar pelo WhatsApp (https://.../convite/CODIGO). Null se o servidor ainda não sabe o próprio endereço. */
     val link: String? = null,
 ) : ServerFrame
+
+/** Resposta a [SetPublicAddressFrame]. */
+@Serializable @SerialName("public_address")
+data class PublicAddressFrame(val requestId: String, val publicBase: String) : ServerFrame
 
 @Serializable @SerialName("pong")
 data class PongFrame(val requestId: String) : ServerFrame

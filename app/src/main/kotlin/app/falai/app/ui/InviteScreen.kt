@@ -21,6 +21,9 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -50,6 +53,9 @@ fun InviteScreen(client: FalaiClient, onBack: () -> Unit) {
     var forMe by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var apkStatus by remember { mutableStateOf<String?>(null) }
+    val publicBase by client.publicBase.collectAsState()
+    var address by remember { mutableStateOf("") }
+    var savingAddress by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     // Deixa o app disponível no servidor, para quem for convidado poder baixar pelo link.
@@ -102,7 +108,9 @@ fun InviteScreen(client: FalaiClient, onBack: () -> Unit) {
 
             invite?.let { inv ->
                 // O link vem do servidor; se ele ainda não souber o próprio endereço, usa o deste aparelho.
-                val link = inv.link ?: me.serverUrl.takeIf { it.startsWith("https://") }?.let { InviteLinks.page(it, inv.code) }
+                val link = inv.link
+                    ?: publicBase?.let { InviteLinks.page(it, inv.code) }
+                    ?: me.serverUrl.takeIf { it.startsWith("https://") }?.let { InviteLinks.page(it, inv.code) }
                 val message = if (forMe) {
                     "Link para ligar mais um aparelho meu ao Falaí: $link"
                 } else {
@@ -138,10 +146,33 @@ fun InviteScreen(client: FalaiClient, onBack: () -> Unit) {
                         ) { Text("Copiar link") }
                         Text(link, color = FalaiColors.TextSec, fontSize = 12.sp)
                     } else {
-                        Text(
-                            "O link fica disponível depois que alguém acessar o Falaí pela internet uma vez. Por enquanto, use o código:",
-                            color = FalaiColors.TextSec, fontSize = 13.sp,
+                        // Só na primeira vez: o servidor ainda não sabe o próprio endereço na internet.
+                        Text("Qual é o endereço do Falaí na internet?", fontWeight = FontWeight.SemiBold)
+                        Text("Só precisa informar uma vez. É o mesmo que você usou no celular pessoal.", color = FalaiColors.TextSec, fontSize = 13.sp)
+                        OutlinedTextField(
+                            value = address, onValueChange = { address = it.trim() },
+                            placeholder = { Text("falai.seudominio.com") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                            modifier = Modifier.fillMaxWidth(),
                         )
+                        Button(
+                            enabled = address.isNotBlank() && !savingAddress,
+                            onClick = {
+                                savingAddress = true
+                                error = null
+                                scope.launch {
+                                    try {
+                                        client.setPublicAddress(address)
+                                    } catch (e: Exception) {
+                                        error = e.message ?: "Não deu para salvar o endereço."
+                                    } finally {
+                                        savingAddress = false
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("Salvar e criar o link") }
                     }
                     Text("Código", color = FalaiColors.TextSec, fontSize = 13.sp)
                     SelectionContainer {
@@ -150,7 +181,7 @@ fun InviteScreen(client: FalaiClient, onBack: () -> Unit) {
                             fontSize = 26.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace,
                         )
                     }
-                    Text("Vale por 24 horas e só pode ser usado uma vez.", color = FalaiColors.TextSec, fontSize = 13.sp)
+                    Text("Vale por 7 dias. Cada pessoa usa o seu próprio convite.", color = FalaiColors.TextSec, fontSize = 13.sp)
                 }
             }
 

@@ -216,4 +216,49 @@ class InviteLinkTest {
         val check = ProcessBuilder("sh", "-n", boot.path).redirectErrorStream(true).start()
         assertEquals(0, check.waitFor(), check.inputStream.bufferedReader().readText())
     }
+
+    @Test
+    fun `admin informa o endereco uma vez e os convites viram link`() = runBlocking {
+        val admin = pair(adminCode, "Edson")
+        val anaInv = invite(admin.token)
+        val ana = pair(anaInv.code, "Ana")
+        suspend fun mandar(token: String, address: String): ServerFrame {
+            val ws = http.webSocketSession("ws://127.0.0.1:$port/ws") { header("Authorization", "Bearer $token") }
+            try {
+                ws.send(Frame.Text(FalaiJson.encodeToString(ClientFrame.serializer(), SetPublicAddressFrame("a1", address))))
+                return withTimeout(5000) {
+                    while (true) {
+                        val f = ws.incoming.receive()
+                        if (f is Frame.Text) {
+                            val fr = FalaiJson.decodeFromString(ServerFrame.serializer(), f.readText())
+                            if (fr is PublicAddressFrame || fr is ErrorFrame) return@withTimeout fr
+                        }
+                    }
+                    @Suppress("UNREACHABLE_CODE") error("x")
+                }
+            } finally { ws.close() }
+        }
+        assertEquals("forbidden", (mandar(ana.token, "falai.falaifamilia.net") as ErrorFrame).code)
+        assertEquals("invalid", (mandar(admin.token, "isso não é endereço") as ErrorFrame).code)
+        assertEquals("invalid", (mandar(admin.token, "192.168.0.10") as ErrorFrame).code)
+        assertNull(server.publicBase())
+        val ok = mandar(admin.token, "  https://Falai.FalaiFamilia.net/  ") as PublicAddressFrame
+        assertEquals("https://falai.falaifamilia.net", ok.publicBase)
+        assertEquals("https://falai.falaifamilia.net/convite/", invite(admin.token).link!!.substringBeforeLast('/') + "/")
+        // Quem conecta fica sabendo do endereço.
+        val ws = http.webSocketSession("ws://127.0.0.1:$port/ws") { header("Authorization", "Bearer ${ana.token}") }
+        val hello = withTimeout(5000) {
+            FalaiJson.decodeFromString(ServerFrame.serializer(), (ws.incoming.receive() as Frame.Text).readText())
+        } as HelloFrame
+        ws.close()
+        assertEquals("https://falai.falaifamilia.net", hello.publicBase)
+    }
+
+    @Test
+    fun `convite vale 7 dias`() = runBlocking {
+        val admin = pair(adminCode, "Edson")
+        val inv = invite(admin.token)
+        val dias = (inv.expiresAt - System.currentTimeMillis()) / (24 * 3600_000.0)
+        assertTrue(dias > 6.9 && dias <= 7.0, "dias=$dias")
+    }
 }

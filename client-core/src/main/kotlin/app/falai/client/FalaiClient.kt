@@ -17,6 +17,8 @@ import app.falai.protocol.MessageFrame
 import app.falai.protocol.PairRequest
 import app.falai.protocol.PairResponse
 import app.falai.protocol.PongFrame
+import app.falai.protocol.PublicAddressFrame
+import app.falai.protocol.SetPublicAddressFrame
 import app.falai.protocol.SendFrame
 import app.falai.protocol.ServerFrame
 import app.falai.protocol.SyncBatchFrame
@@ -321,6 +323,7 @@ class FalaiClient(
                     store.saveAccount(updated)
                     _me.value = updated
                 }
+                _publicBase.value = f.publicBase
                 _connection.value = ConnectionState.ONLINE
                 sendFrame(ws, ListUsersFrame("hello-users"))
                 sendFrame(ws, SyncFrame(store.syncedSeq()))
@@ -349,6 +352,10 @@ class FalaiClient(
             }
             is InviteFrame -> pendingRequests.remove(f.requestId)?.complete(f)
             is PongFrame -> pendingRequests.remove(f.requestId)?.complete(f)
+            is PublicAddressFrame -> {
+                _publicBase.value = f.publicBase
+                pendingRequests.remove(f.requestId)?.complete(f)
+            }
             is ErrorFrame -> {
                 log("Erro do servidor: ${f.code} ${f.message}")
                 val waiting = f.requestId?.let { pendingRequests.remove(it) }
@@ -404,6 +411,16 @@ class FalaiClient(
     suspend fun createInvite(forUserId: String? = null): InviteFrame {
         val id = UUID.randomUUID().toString()
         return request(id, CreateInviteFrame(id, forUserId)) as InviteFrame
+    }
+
+    private val _publicBase = MutableStateFlow<String?>(null)
+    /** Endereço do Falaí na internet (ex.: https://falai.falaifamilia.net), se o servidor já souber. */
+    val publicBase: StateFlow<String?> = _publicBase.asStateFlow()
+
+    /** Só o administrador: informa o endereço do Falaí na internet. Devolve a base (https://...). */
+    suspend fun setPublicAddress(address: String): String {
+        val id = UUID.randomUUID().toString()
+        return (request(id, SetPublicAddressFrame(id, address)) as PublicAddressFrame).publicBase
     }
 
     suspend fun refreshUsers() {

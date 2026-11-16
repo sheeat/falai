@@ -83,7 +83,7 @@ O servidor só aceita conexões do próprio celular (`127.0.0.1`). Quem chega de
    O registro fica em `~/falai-tunel.log`. Deixe a bateria do Termux **sem restrição**.
 4. Teste de qualquer lugar: `https://falai.SEUDOMINIO/health`.
 
-O servidor aprende o próprio endereço público no primeiro acesso pela Cloudflare; a partir daí, os convites saem como link.
+Na primeira vez em *Convidar*, o app pede o endereço (ex.: `falai.SEUDOMINIO`); a partir daí, os convites saem como link. Cada convite vale 7 dias e serve para uma pessoa.
 
 ### Cuidado com a bateria
 
