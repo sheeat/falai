@@ -465,4 +465,44 @@ class FalaiClientTest {
         assertEquals("ARQUIVO", ClientStore.typeLabel("sem nome", "application/octet-stream"))
         assertEquals("MP4", ClientStore.typeLabel("x.mp4", "video/mp4"))
     }
+
+    @Test
+    fun `resposta do pareamento se perde no 4G e o app tenta de novo sem gastar o convite`() = runBlocking {
+        val (chefe, _, _) = family()
+        val code = chefe.createInvite(forUserId = chefe.account.value!!.userId).code
+        // "Ponte" que entrega o primeiro pedido ao servidor mas joga fora a resposta (como no 4G).
+        val ponte = java.net.ServerSocket(0)
+        var conexoes = 0
+        val t = Thread {
+            while (!ponte.isClosed) {
+                val entrada = try { ponte.accept() } catch (e: Exception) { break }
+                conexoes++
+                val primeira = conexoes == 1
+                Thread {
+                    entrada.use { e ->
+                        java.net.Socket("127.0.0.1", port).use { srv ->
+                            val ida = Thread { runCatching { e.getInputStream().copyTo(srv.getOutputStream()) } }.apply { start() }
+                            if (primeira) {
+                                // Espera o servidor responder e derruba sem repassar.
+                                runCatching { srv.getInputStream().read(ByteArray(4096)) }
+                            } else {
+                                runCatching { srv.getInputStream().copyTo(e.getOutputStream()) }
+                            }
+                            ida.interrupt()
+                        }
+                    }
+                }.start()
+            }
+        }.apply { isDaemon = true; start() }
+        try {
+            val pessoal = newClient("pessoal")
+            val acc = pessoal.pair("http://127.0.0.1:${ponte.localPort}", code, "Celular pessoal", null)
+            assertTrue(conexoes >= 2, "devia ter tentado de novo")
+            assertEquals(chefe.account.value!!.userId, acc.userId)
+            assertTrue(acc.isAdmin)
+        } finally {
+            ponte.close()
+            t.interrupt()
+        }
+    }
 }

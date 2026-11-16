@@ -31,6 +31,12 @@ data class PairRequest(
     val deviceName: String,
     /** Nome da pessoa. Ignorado quando o convite é para adicionar aparelho a alguém que já existe. */
     val userName: String? = null,
+    /**
+     * Identificador desta tentativa, gerado pelo aparelho. Se a resposta se perder (internet
+     * oscilando) e o aparelho repetir o pedido com o mesmo código e o mesmo id, o servidor
+     * reconhece e responde de novo, em vez de dizer que o convite já foi usado.
+     */
+    val attemptId: String? = null,
 )
 
 @Serializable

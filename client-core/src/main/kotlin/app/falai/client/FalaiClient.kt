@@ -103,33 +103,51 @@ class FalaiClient(
 
     // ---------- Pareamento ----------
 
-    /** Troca o código de convite por uma conta neste aparelho. */
+    /** Um id de tentativa por código: repetir com o mesmo código reaproveita o id (ver PairRequest). */
+    private val pairAttempts = ConcurrentHashMap<String, String>()
+
+    /**
+     * Troca o código de convite por uma conta neste aparelho. Se a internet oscilar, tenta de novo
+     * sozinho; o servidor reconhece a repetição e o convite não se perde.
+     */
     suspend fun pair(serverUrl: String, code: String, deviceName: String, userName: String?): Account =
         withContext(Dispatchers.IO) {
             val base = normalizeUrl(serverUrl)
-            val body = FalaiJson.encodeToString(PairRequest.serializer(), PairRequest(code.trim(), deviceName, userName))
+            val cleanCode = code.trim()
+            val attemptId = pairAttempts.getOrPut(cleanCode.uppercase().filter { it.isLetterOrDigit() }) { UUID.randomUUID().toString() }
+            val body = FalaiJson.encodeToString(PairRequest.serializer(), PairRequest(cleanCode, deviceName, userName, attemptId))
             val req = Request.Builder()
                 .url("$base/api/pair")
                 .post(body.toRequestBody("application/json".toMediaType()))
                 .build()
-            val resp = try {
-                http.newCall(req).execute()
-            } catch (e: IOException) {
-                throw FalaiClientException("network", "Não consegui falar com o servidor. Confira o endereço e a internet.")
-            }
-            resp.use { r ->
-                val text = r.body?.string().orEmpty()
-                if (!r.isSuccessful) {
-                    val err = runCatching { FalaiJson.decodeFromString(ErrorResponse.serializer(), text) }.getOrNull()
-                    throw FalaiClientException(err?.error ?: "http_${r.code}", err?.message ?: "Erro do servidor (${r.code}).")
+            var lastError: IOException? = null
+            for (attempt in 0 until 3) {
+                if (attempt > 0) delay(1500L * attempt)
+                val resp = try {
+                    mediaHttp.newCall(req).execute()
+                } catch (e: IOException) {
+                    log("Pareamento: falha de rede (${e.message}), tentativa ${attempt + 1}")
+                    lastError = e
+                    continue
                 }
-                val p = FalaiJson.decodeFromString(PairResponse.serializer(), text)
-                val acc = Account(base, p.token, p.userId, p.deviceId, p.isAdmin)
-                store.saveAccount(acc)
-                _me.value = acc
-                bump()
-                acc
+                return@withContext resp.use { r ->
+                    val text = r.body?.string().orEmpty()
+                    if (!r.isSuccessful) {
+                        val err = runCatching { FalaiJson.decodeFromString(ErrorResponse.serializer(), text) }.getOrNull()
+                        throw FalaiClientException(err?.error ?: "http_${r.code}", err?.message ?: "Erro do servidor (${r.code}).")
+                    }
+                    val p = FalaiJson.decodeFromString(PairResponse.serializer(), text)
+                    val acc = Account(base, p.token, p.userId, p.deviceId, p.isAdmin)
+                    store.saveAccount(acc)
+                    _me.value = acc
+                    bump()
+                    acc
+                }
             }
+            throw FalaiClientException(
+                "network",
+                "Não consegui falar com o servidor (${lastError?.message ?: "sem resposta"}). Confira o endereço e a internet e tente de novo com o mesmo código.",
+            )
         }
 
     // ---------- Conexão ----------
