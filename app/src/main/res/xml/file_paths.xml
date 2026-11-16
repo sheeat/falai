@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Arquivos do Falaí que podem ser abertos por outros apps (galeria, player, leitor de PDF)
+         e a pasta onde a câmera grava a foto/vídeo original. -->
+    <files-path name="media" path="media/" />
+</paths>

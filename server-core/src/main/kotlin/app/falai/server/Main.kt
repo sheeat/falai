@@ -17,5 +17,5 @@ fun main(args: Array<String>) {
     val host = arg("--host") ?: "127.0.0.1"
 
     val store = Store(JdbcDb(File(dataDir, "falai.db").path))
-    FalaiServer(store, ServerConfig(host = host, port = port)).start(wait = true)
+    FalaiServer(store, ServerConfig(host = host, port = port, mediaDir = File(dataDir, "media"))).start(wait = true)
 }

@@ -49,9 +49,20 @@ class ServerService : Service() {
             try {
                 val dbFile = File(filesDir, "falai.db")
                 val store = Store(AndroidDb(dbFile.path))
-                val s = FalaiServer(store, ServerConfig(host = "127.0.0.1", port = PORT), log = { Log.i(TAG, it) })
+                // Mídia no cartão microSD, se houver (o último da lista); senão, na memória interna.
+                // Atenção: esta pasta é apagada se o app do servidor for desinstalado.
+                val storageRoot = getExternalFilesDirs(null).filterNotNull().lastOrNull() ?: filesDir
+                val mediaDir = File(storageRoot, "media")
+                Log.i(TAG, "Mídia em: ${mediaDir.absolutePath}")
+                val s = FalaiServer(
+                    store,
+                    ServerConfig(host = "127.0.0.1", port = PORT, mediaDir = mediaDir),
+                    log = { Log.i(TAG, it) },
+                )
                 val adminCode = s.start(wait = false)
                 server = s
+                current = s
+                currentMediaDir = mediaDir.absolutePath
                 Status.update(this, running = true, adminCode = adminCode, error = null)
                 notify(if (adminCode != null) "Ligado · código do admin: $adminCode" else "Ligado na porta $PORT")
             } catch (t: Throwable) {
@@ -67,6 +78,7 @@ class ServerService : Service() {
     override fun onDestroy() {
         server?.stop()
         server = null
+        current = null
         wakeLock?.release()
         Status.update(this, running = false, adminCode = null, error = null)
         super.onDestroy()
@@ -99,6 +111,10 @@ class ServerService : Service() {
     companion object {
         const val TAG = "FalaiServer"
         const val PORT = 8443
+
+        /** O servidor rodando agora (para a tela mostrar aparelhos conectados). */
+        @Volatile var current: FalaiServer? = null
+        @Volatile var currentMediaDir: String? = null
         private const val CHANNEL = "server"
         private const val NOTIF_ID = 1
 

@@ -39,6 +39,8 @@ data class ServerConfig(
     /** Tentativas de pareamento com código errado por IP, dentro da janela. */
     val pairMaxFailures: Int = 10,
     val pairWindowMs: Long = 10 * 60_000L,
+    /** Onde ficam fotos, vídeos, áudios e arquivos. No celular-servidor: o cartão microSD. */
+    val mediaDir: java.io.File = java.io.File("data/media"),
 )
 
 /** Limita tentativas de adivinhar códigos de convite. */
@@ -93,16 +95,37 @@ class Hub {
     }
 
     fun onlineDevices(userId: String): Int = byUser[userId]?.size ?: 0
+
+    /** Total de aparelhos conectados agora (para a tela do servidor). */
+    fun connectionCount(): Int = byUser.values.sumOf { it.size }
+
+    /** Quem está conectado agora, ex.: "Ana (1a2b3c4d)". */
+    fun connectedNames(): List<String> =
+        byUser.values.flatten().map { "${it.device.user.name} (${it.device.deviceId.take(8)})" }.sorted()
 }
 
 class FalaiServer(
     private val store: Store,
     private val config: ServerConfig = ServerConfig(),
-    private val log: (String) -> Unit = { println("[falai] $it") },
+    log: (String) -> Unit = { println("[falai] $it") },
     clock: () -> Long = System::currentTimeMillis,
 ) {
     val hub = Hub()
+
+    private val recent = java.util.ArrayDeque<String>()
+    /** Últimos acontecimentos (para a tela do servidor ajudar a achar problemas). */
+    fun recentEvents(): List<String> = synchronized(recent) { recent.toList() }
+
+    private val log: (String) -> Unit = { msg ->
+        val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.ROOT).format(java.util.Date())
+        synchronized(recent) {
+            recent.addLast("$time $msg")
+            while (recent.size > 12) recent.removeFirst()
+        }
+        log(msg)
+    }
     private val limiter = FailureLimiter(config.pairMaxFailures, config.pairWindowMs, clock)
+    private val mediaFiles = MediaFiles(config.mediaDir, store, this.log)
     private var engine: EmbeddedServer<*, *>? = null
 
     /** Sobe o servidor. Se ainda não há ninguém cadastrado, devolve o código do administrador. */
@@ -190,6 +213,8 @@ class FalaiServer(
                 )
             }
 
+            mediaRoutes(store, mediaFiles, log)
+
             webSocket("/ws") { handleSocket() }
         }
     }
@@ -244,7 +269,12 @@ class FalaiServer(
                 try {
                     handleFrame(conn, parsed, ::reply)
                 } catch (e: FalaiException) {
+                    log("Recusado (${device.user.name}): ${e.code} ${e.message}")
                     reply(ErrorFrame(e.code, e.message ?: "", requestIdOf(parsed)))
+                } catch (e: Exception) {
+                    // Erro inesperado: avisa o aparelho e segue com a conexão aberta.
+                    log("Erro inesperado (${device.user.name}): $e")
+                    reply(ErrorFrame("server_error", "Erro no servidor: ${e.message ?: e.javaClass.simpleName}", requestIdOf(parsed)))
                 }
             }
         } finally {

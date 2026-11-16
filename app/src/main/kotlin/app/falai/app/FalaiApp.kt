@@ -21,7 +21,7 @@ class FalaiApp : Application() {
         super.onCreate()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val store = ClientStore(AndroidDb(File(filesDir, "falai-app.db").path))
-        client = FalaiClient(store, scope, log = { Log.i("Falai", it) })
+        client = FalaiClient(store, scope, File(filesDir, "media"), log = { Log.i("Falai", it) })
         if (store.account() != null) client.start()
 
         // Quando a internet volta (troca de Wi-Fi para dados, etc.), reconecta na hora.

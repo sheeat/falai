@@ -87,6 +87,27 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
                 db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '1')")
             }
         }
+        if (version < 2) {
+            db.transaction {
+                // M3: anexos. O arquivo fica em disco; aqui só os dados dele.
+                db.execute("ALTER TABLE messages ADD COLUMN attachment_json TEXT")
+                db.execute("ALTER TABLE messages ADD COLUMN media_id TEXT")
+                db.execute("CREATE INDEX messages_by_media ON messages(media_id)")
+                db.execute(
+                    """CREATE TABLE media (
+                        id TEXT PRIMARY KEY,
+                        uploader_id TEXT NOT NULL REFERENCES users(id),
+                        size INTEGER NOT NULL,
+                        sha256 TEXT NOT NULL,
+                        mime TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        received INTEGER NOT NULL DEFAULT 0,
+                        complete INTEGER NOT NULL DEFAULT 0,
+                        created_at INTEGER NOT NULL)"""
+                )
+                db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '2')")
+            }
+        }
     }
 
     // ---------- Utilidades ----------
@@ -272,7 +293,7 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
     fun storeMessage(device: AuthedDevice, frame: SendFrame): StoredMessage = db.transaction {
         val id = frame.id.trim()
         if (id.isEmpty() || id.length > 64) throw FalaiException("invalid", "Id de mensagem inválido.")
-        if (frame.body.isEmpty()) throw FalaiException("invalid", "Mensagem vazia.")
+        if (frame.body.isEmpty() && frame.attachment == null) throw FalaiException("invalid", "Mensagem vazia.")
         if (frame.body.length > 64_000) throw FalaiException("too_large", "Mensagem grande demais.")
 
         val existing = messageById(id)
@@ -284,14 +305,23 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         if (!isMember(frame.conversationId, device.user.id)) {
             throw FalaiException("forbidden", "Você não participa desta conversa.")
         }
+        val att = frame.attachment?.let { a ->
+            val m = media(a.mediaId) ?: throw FalaiException("invalid", "Anexo não encontrado.")
+            if (!m.complete) throw FalaiException("invalid", "O anexo ainda não terminou de subir.")
+            if (m.uploaderId != device.user.id) throw FalaiException("forbidden", "Anexo de outra pessoa.")
+            if (!a.kind.matches(Regex("image|video|audio|file"))) throw FalaiException("invalid", "Tipo de anexo inválido.")
+            // Os dados confiáveis vêm do servidor; do cliente só o tipo, a duração e a miniatura.
+            a.copy(mime = m.mime, name = m.name, size = m.size, sha256 = m.sha256, thumb = sanitizeThumb(a.thumb))
+        }
         val now = clock()
         val seq = db.insert(
-            """INSERT INTO messages (id, conversation_id, author_id, author_device_id, body, created_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO messages (id, conversation_id, author_id, author_device_id, body, created_at, attachment_json, media_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             id, frame.conversationId, device.user.id, device.deviceId, frame.body, now,
+            att?.let { FalaiJson.encodeToString(AttachmentDto.serializer(), it) }, att?.mediaId,
         )
         StoredMessage(
-            MessageDto(seq, id, frame.conversationId, device.user.id, device.deviceId, frame.body, now),
+            MessageDto(seq, id, frame.conversationId, device.user.id, device.deviceId, frame.body, now, att),
             isNew = true,
         )
     }
@@ -304,6 +334,7 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         authorDeviceId = r.string("author_device_id"),
         body = r.string("body"),
         createdAt = r.long("created_at"),
+        attachment = r.stringOrNull("attachment_json")?.let { FalaiJson.decodeFromString(AttachmentDto.serializer(), it) },
     )
 
     fun messageById(id: String): MessageDto? =
@@ -326,4 +357,53 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
                JOIN members mb ON mb.conversation_id = m.conversation_id AND mb.user_id = ?""",
             userId,
         ).first().long("s")
+
+    // ---------- Mídia ----------
+
+    data class MediaRow(
+        val id: String, val uploaderId: String, val size: Long, val sha256: String,
+        val mime: String, val name: String, val received: Long, val complete: Boolean,
+    ) {
+        fun status() = MediaStatus(id, size, received, complete)
+    }
+
+    private fun rowToMedia(r: Row) = MediaRow(
+        r.string("id"), r.string("uploader_id"), r.long("size"), r.string("sha256"),
+        r.string("mime"), r.string("name"), r.long("received"), r.bool("complete"),
+    )
+
+    fun media(id: String): MediaRow? =
+        db.query("SELECT * FROM media WHERE id = ?", id).firstOrNull()?.let(::rowToMedia)
+
+    fun createMedia(uploaderId: String, req: MediaCreateRequest): MediaRow {
+        if (req.size <= 0 || req.size > MEDIA_MAX_BYTES) throw FalaiException("too_large", "Arquivo vazio ou grande demais (máximo 2 GB).")
+        if (!req.sha256.matches(Regex("[0-9a-f]{64}"))) throw FalaiException("invalid", "Hash inválido.")
+        val id = newId()
+        db.execute(
+            """INSERT INTO media (id, uploader_id, size, sha256, mime, name, received, complete, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?)""",
+            id, uploaderId, req.size, req.sha256, req.mime.take(100).ifBlank { "application/octet-stream" },
+            req.name.take(200).ifBlank { "arquivo" }, clock(),
+        )
+        return media(id)!!
+    }
+
+    fun setMediaProgress(id: String, received: Long, complete: Boolean) {
+        db.update("UPDATE media SET received = ?, complete = ? WHERE id = ?", received, complete, id)
+    }
+
+    /** Quem pode baixar: quem enviou, ou quem participa de uma conversa onde o anexo apareceu. */
+    fun canDownload(mediaId: String, userId: String): Boolean {
+        val m = media(mediaId) ?: return false
+        if (m.uploaderId == userId) return true
+        return db.query(
+            """SELECT 1 AS x FROM messages msg
+               JOIN members mb ON mb.conversation_id = msg.conversation_id AND mb.user_id = ?
+               WHERE msg.media_id = ? LIMIT 1""",
+            userId, mediaId,
+        ).isNotEmpty()
+    }
+
+    /** Uso total dos arquivos completos, em bytes (para o alerta de armazenamento, no futuro). */
+    fun mediaBytes(): Long = db.query("SELECT COALESCE(SUM(size), 0) AS s FROM media WHERE complete = 1").first().long("s")
 }

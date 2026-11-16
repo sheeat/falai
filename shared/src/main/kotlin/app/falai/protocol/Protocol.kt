@@ -69,7 +69,54 @@ data class MessageDto(
     val authorDeviceId: String,
     val body: String,
     val createdAt: Long,
+    /** Foto, vídeo, áudio ou arquivo anexado (o arquivo em si é baixado à parte, sob demanda). */
+    val attachment: AttachmentDto? = null,
 )
+
+@Serializable
+data class AttachmentDto(
+    val mediaId: String,
+    /** "image", "video", "audio" ou "file". */
+    val kind: String,
+    val mime: String,
+    val name: String,
+    val size: Long,
+    /** SHA-256 do arquivo original, em hexadecimal. Garante que chegou idêntico. */
+    val sha256: String,
+    val durationMs: Long? = null,
+    /**
+     * Miniatura pequena (JPEG em base64) de fotos e vídeos, para quem recebe ver a prévia
+     * antes de baixar, como nos outros mensageiros. No máximo [MAX_THUMB_CHARS] caracteres.
+     */
+    val thumb: String? = null,
+)
+
+/** Tamanho máximo da miniatura em base64 (cerca de 18 KB de JPEG). */
+const val MAX_THUMB_CHARS = 24_000
+
+private val BASE64_CHARS = Regex("^[A-Za-z0-9+/]+={0,2}$")
+
+/** A miniatura só é aceita se for pequena e parecer base64; senão, é descartada. */
+fun sanitizeThumb(thumb: String?): String? =
+    thumb?.takeIf { it.length in 4..MAX_THUMB_CHARS && BASE64_CHARS.matches(it) }
+
+// ---------- Mídia (HTTP) ----------
+//
+//   POST /api/media                      MediaCreateRequest -> MediaStatus   (começa um envio)
+//   GET  /api/media/{id}/status          -> MediaStatus                      (para retomar)
+//   PUT  /api/media/{id}?offset=N        bytes (até 8 MB) -> MediaStatus     (um pedaço)
+//   GET  /api/media/{id}                 -> o arquivo original
+//
+// Todas com "Authorization: Bearer <token>".
+
+const val MEDIA_CHUNK_BYTES = 8 * 1024 * 1024
+const val MEDIA_MAX_BYTES = 2L * 1024 * 1024 * 1024
+
+@Serializable
+data class MediaCreateRequest(val size: Long, val sha256: String, val mime: String, val name: String)
+
+@Serializable
+data class MediaStatus(val mediaId: String, val size: Long, val received: Long, val complete: Boolean)
 
 // ---------- Cliente -> servidor ----------
 
@@ -77,7 +124,13 @@ data class MessageDto(
 sealed interface ClientFrame
 
 @Serializable @SerialName("send")
-data class SendFrame(val id: String, val conversationId: String, val body: String) : ClientFrame
+data class SendFrame(
+    val id: String,
+    val conversationId: String,
+    val body: String,
+    /** Só depois que o arquivo terminou de subir (MediaStatus.complete). */
+    val attachment: AttachmentDto? = null,
+) : ClientFrame
 
 @Serializable @SerialName("sync")
 data class SyncFrame(val afterSeq: Long = 0) : ClientFrame

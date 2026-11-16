@@ -49,7 +49,7 @@ class FalaiServerTest {
     fun setUp() = runBlocking {
         dir = Files.createTempDirectory("falai-test").toFile()
         store = Store(JdbcDb(File(dir, "t.db").path))
-        server = FalaiServer(store, ServerConfig(port = 0, syncBatchSize = 3, pairMaxFailures = 3), log = {})
+        server = FalaiServer(store, ServerConfig(port = 0, syncBatchSize = 3, pairMaxFailures = 3, mediaDir = File(dir, "media")), log = {})
         adminCode = server.start()
         port = server.boundPort()
         http = HttpClient(CIO) { install(WebSockets) }
@@ -344,7 +344,7 @@ class FalaiServerTest {
         server.stop()
 
         val store2 = Store(JdbcDb(File(dir, "t.db").path))
-        server = FalaiServer(store2, ServerConfig(port = 0), log = {})
+        server = FalaiServer(store2, ServerConfig(port = 0, mediaDir = File(dir, "media")), log = {})
         assertNull(server.start(), "não deve gerar código de admin de novo")
         port = server.boundPort()
 

@@ -45,8 +45,13 @@ fun ConversationsScreen(
     val changes by client.changes.collectAsState()
     val state by client.connection.collectAsState()
     val account by client.account.collectAsState()
+    val lastError by client.lastError.collectAsState()
     val me = account?.userId ?: return
     val list = remember(changes) { client.store.conversationSummaries(me) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val appVersion = remember {
+        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "?"
+    }
 
     Box(Modifier.fillMaxSize().background(Color.White)) {
         Column(Modifier.fillMaxSize()) {
@@ -65,7 +70,31 @@ fun ConversationsScreen(
                         TextButton(onClick = onInvite) { Text("Convidar", color = Color.White) }
                     }
                 }
-                ConnectionBadge(state)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    ConnectionBadge(state)
+                    Spacer(Modifier.weight(1f))
+                    Text("v$appVersion", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+                }
+            }
+
+            // Quando algo não vai bem, mostra o motivo e um botão para tentar na hora.
+            val queued = remember(changes) { client.store.queuedCount() }
+            if (state != app.falai.client.ConnectionState.ONLINE || queued > 0) {
+                Row(
+                    Modifier.fillMaxWidth().background(FalaiColors.ChatBg).padding(horizontal = 16.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        if (queued > 0) Text("🕓 $queued na fila para enviar", fontSize = 13.sp)
+                        if (state != app.falai.client.ConnectionState.ONLINE) {
+                            Text(lastError ?: "Sem conexão com o servidor.", fontSize = 12.sp, color = FalaiColors.TextSec)
+                        } else if (lastError != null) {
+                            // Online, mas algo não sobe: mostra o motivo.
+                            Text(lastError!!, fontSize = 12.sp, color = FalaiColors.TextSec)
+                        }
+                    }
+                    TextButton(onClick = { client.reconnectNow(force = true) }) { Text("Reconectar") }
+                }
             }
 
             if (list.isEmpty()) {
@@ -136,5 +165,5 @@ fun formatTime(epochMs: Long): String {
     val sameDay = now.get(java.util.Calendar.YEAR) == then.get(java.util.Calendar.YEAR) &&
         now.get(java.util.Calendar.DAY_OF_YEAR) == then.get(java.util.Calendar.DAY_OF_YEAR)
     val pattern = if (sameDay) "HH:mm" else "dd/MM"
-    return java.text.SimpleDateFormat(pattern, java.util.Locale("pt", "BR")).format(java.util.Date(epochMs))
+    return java.text.SimpleDateFormat(pattern, java.util.Locale.forLanguageTag("pt-BR")).format(java.util.Date(epochMs))
 }

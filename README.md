@@ -2,7 +2,7 @@
 
 Mensageiro da família. Um celular antigo fica em casa como servidor, e os celulares e tablets da família se conectam a ele pela internet através do Cloudflare Tunnel.
 
-## Estado atual: M2 (app da família, só texto)
+## Estado atual: M3 (fotos, vídeos, áudios e arquivos)
 
 | Parte | O que faz | Testado |
 |---|---|---|
@@ -12,7 +12,11 @@ Mensageiro da família. Um celular antigo fica em casa como servidor, e os celul
 | `client-core` | "Motor" do app da família: pareamento, conexão com reconexão automática, fila de envio sem internet, sync do histórico, banco local | Sim, 11 testes contra o servidor de verdade |
 | `app` | App da família (Jetpack Compose): pareamento, lista de conversas, chat, nova conversa/grupo, convites (admin) | Telas conferidas por compilação; precisa ser testado no celular |
 
-Ainda não tem: notificações com o app fechado (FCM), mídia (M3), chamadas (M4), criptografia no app.
+**Mídia (M3):** o arquivo original sobe em pedaços de 8 MB (com retomada se a conexão cair) e o servidor confere o SHA-256: chega idêntico, sem recompressão. Quem recebe só baixa quando a mensagem aparece na tela (fotos e áudios até 25 MB) ou quando toca (vídeos e arquivos). No celular-servidor, os arquivos ficam no cartão microSD, se houver.
+
+> ⚠️ A pasta de mídia do servidor é apagada se o app do servidor for **desinstalado**. Atualizar o app não apaga nada.
+
+Ainda não tem: notificações com o app fechado (FCM), editor de fotos/vídeo, chamadas (M4), criptografia no app.
 
 ## Rodar os testes (PC)
 

@@ -42,7 +42,7 @@ class FalaiClientTest {
     }
 
     private suspend fun startServer(fixedPort: Int) {
-        server = FalaiServer(Store(JdbcDb(File(dir, "server.db").path)), ServerConfig(port = fixedPort), log = {})
+        server = FalaiServer(Store(JdbcDb(File(dir, "server.db").path)), ServerConfig(port = fixedPort, mediaDir = File(dir, "server-media")), log = {})
         server.start()?.let { adminCode = it }
         port = server.boundPort()
     }
@@ -55,10 +55,15 @@ class FalaiClientTest {
         dir.deleteRecursively()
     }
 
-    private fun newClient(name: String): FalaiClient {
+    private fun newClient(
+        name: String,
+        delays: List<Long> = listOf(100, 200, 300),
+        handshakeTimeoutMs: Long = 20_000,
+    ): FalaiClient {
         val c = FalaiClient(
-            ClientStore(JdbcDb(File(dir, "$name.db").path)), scope,
-            reconnectDelaysMs = listOf(100, 200, 300),
+            ClientStore(JdbcDb(File(dir, "$name.db").path)), scope, File(dir, "$name-media"),
+            reconnectDelaysMs = delays,
+            handshakeTimeoutMs = handshakeTimeoutMs,
         )
         clients += c
         return c
@@ -245,5 +250,219 @@ class FalaiClientTest {
     fun `endereco aceita varios formatos`() {
         assertEquals("https://falai.exemplo.com", FalaiClient.normalizeUrl(" falai.exemplo.com/ "))
         assertEquals("http://10.0.2.2:8443", FalaiClient.normalizeUrl("http://10.0.2.2:8443"))
+    }
+
+    // ---------- Arquivos (M3) ----------
+
+    private fun randomFile(name: String, size: Int, seed: Int): File =
+        File(dir, name).apply { writeBytes(kotlin.random.Random(seed).nextBytes(size)) }
+
+    @Test
+    fun `foto vai identica e so baixa quando abre`() = runBlocking {
+        val (chefe, ana, conv) = family()
+        val foto = randomFile("foto.jpg", 3 * 1024 * 1024 + 7, 1)
+
+        val m = chefe.sendMedia(conv, foto, "image", "image/jpeg", caption = "olha que lindo")
+        assertEquals(MessageStatus.PENDING, m.status)
+        assertEquals(foto.path, m.localPath)
+
+        eventually("Ana receber a mensagem com anexo") { ana.store.messages(conv).singleOrNull()?.attachment != null }
+        val recebida = ana.store.messages(conv).single()
+        val att = recebida.attachment!!
+        assertEquals("olha que lindo", recebida.body)
+        assertEquals("image", att.kind)
+        assertEquals(foto.length(), att.size)
+        assertEquals(null, recebida.localPath) // ainda não baixou
+        assertEquals("📷 Foto · olha que lindo", ana.store.conversationSummaries(ana.account.value!!.userId).single().lastBody)
+
+        val baixado = ana.mediaFile(att)
+        kotlin.test.assertContentEquals(foto.readBytes(), baixado.readBytes())
+        assertEquals(baixado.path, ana.store.messages(conv).single().localPath)
+        eventually("✓ no Chefe") { chefe.store.messages(conv).single().status == MessageStatus.SENT }
+        // Baixar de novo usa o que já está no aparelho.
+        assertEquals(baixado.path, ana.mediaFile(att).path)
+    }
+
+    @Test
+    fun `video grande sobe em pedacos mesmo com servidor fora no inicio`() = runBlocking {
+        val (chefe, ana, conv) = family()
+        val samePort = port
+        server.stop()
+        eventually("Chefe perceber a queda") { chefe.connection.value != ConnectionState.ONLINE }
+
+        val video = randomFile("video.mp4", 20 * 1024 * 1024 + 99, 2) // 3 pedaços
+        chefe.sendMedia(conv, video, "video", "video/mp4")
+        delay(500)
+        assertEquals(MessageStatus.PENDING, chefe.store.messages(conv).single().status)
+
+        startServer(samePort)
+        eventually("Ana receber o vídeo") { ana.store.messages(conv).singleOrNull()?.attachment != null }
+        val att = ana.store.messages(conv).single().attachment!!
+        assertEquals("🎥 Vídeo", ana.store.conversationSummaries(ana.account.value!!.userId).single().lastBody)
+        kotlin.test.assertContentEquals(video.readBytes(), ana.mediaFile(att).readBytes())
+    }
+
+    @Test
+    fun `audio e texto chegam na ordem em que foram escritos`() = runBlocking {
+        val (chefe, ana, conv) = family()
+        val audio = randomFile("audio.m4a", 200_000, 3)
+        chefe.sendMedia(conv, audio, "audio", "audio/mp4", durationMs = 42_000)
+        eventually("áudio chegar") { ana.store.messages(conv).isNotEmpty() }
+        chefe.send(conv, "ouviu?")
+        eventually("Ana receber os dois") { bodies(ana, conv) == listOf("", "ouviu?") }
+        assertEquals("🎤 Áudio (0:42)", ClientStore.preview("", ana.store.messages(conv).first().attachment))
+    }
+
+    @Test
+    fun `tablet novo ve o anexo antigo e consegue baixar`() = runBlocking {
+        val (chefe, ana, conv) = family()
+        val doc = randomFile("lista-churrasco.pdf", 150_000, 4)
+        ana.sendMedia(conv, doc, "file", "application/pdf")
+        eventually("enviado") { ana.store.messages(conv).single().status == MessageStatus.SENT }
+
+        val tablet = newClient("tablet")
+        tablet.pair(url, chefe.createInvite(chefe.account.value!!.userId).code, "Tablet", null)
+        online(tablet)
+        eventually("tablet ver o anexo") { tablet.store.messages(conv).singleOrNull()?.attachment != null }
+        val att = tablet.store.messages(conv).single().attachment!!
+        assertEquals("lista-churrasco.pdf", att.name)
+        kotlin.test.assertContentEquals(doc.readBytes(), tablet.mediaFile(att).readBytes())
+        assertEquals("📄 lista-churrasco.pdf", ClientStore.preview("", att))
+    }
+
+    @Test
+    fun `quem nao esta na conversa nao consegue baixar`() = runBlocking {
+        val (chefe, _, conv) = family()
+        val foto = randomFile("f.jpg", 5000, 5)
+        chefe.sendMedia(conv, foto, "image", "image/jpeg")
+        eventually("enviado") { chefe.store.messages(conv).single().status == MessageStatus.SENT }
+        val att = chefe.store.messages(conv).single().attachment!!
+
+        val bruno = newClient("bruno")
+        bruno.pair(url, chefe.createInvite().code, "Celular", "Bruno")
+        val e = assertFailsWith<FalaiClientException> { bruno.mediaFile(att) }
+        assertEquals("http_404", e.code)
+    }
+
+    // ---------- Reconexão (problemas vistos no teste no celular) ----------
+
+    @Test
+    fun `servidor que aceita a conexao mas nao responde nao prende o app`() = runBlocking {
+        // Imita a "ponte" do cabo meio caída: aceita a conexão e fica mudo.
+        val mudo = java.net.ServerSocket(0)
+        val aceitas = mutableListOf<java.net.Socket>()
+        val t = Thread { try { while (true) aceitas += mudo.accept() } catch (_: Exception) {} }.apply { isDaemon = true; start() }
+        try {
+            val c = newClient("x", delays = listOf(100), handshakeTimeoutMs = 500)
+            c.store.saveAccount(Account("http://127.0.0.1:${mudo.localPort}", "t", "u", "d", false))
+            c.start()
+            eventually("conectando") { c.connection.value == ConnectionState.CONNECTING }
+            eventually("desistir e avisar") { c.lastError.value?.contains("não respondeu") == true }
+            eventually("tentar de novo") { aceitas.size >= 2 }
+        } finally {
+            mudo.close()
+            aceitas.forEach { it.close() }
+            t.interrupt()
+        }
+    }
+
+    @Test
+    fun `reconectar agora nao espera os 30 segundos`() = runBlocking {
+        val (chefe, ana, conv) = family()
+        ana.stop()
+        val samePort = port
+        server.stop()
+
+        // Ana volta a tentar com espera longa (como depois de muitas falhas no celular).
+        val ana2 = FalaiClient(ana.store, scope, File(dir, "ana-media"), reconnectDelaysMs = listOf(60_000))
+        clients += ana2
+        ana2.send(conv, "Ola")
+        ana2.start()
+        eventually("Ana desistir da primeira tentativa") { ana2.connection.value == ConnectionState.OFFLINE }
+        assertTrue(ana2.lastError.value != null)
+
+        startServer(samePort)
+        delay(300)
+        assertEquals(ConnectionState.OFFLINE, ana2.connection.value) // ainda esperando os 60s
+        ana2.reconnectNow() // app aberto / internet voltou / botão "Reconectar"
+        eventually("Ana online na hora") { ana2.connection.value == ConnectionState.ONLINE }
+        assertEquals(null, ana2.lastError.value)
+        eventually("Chefe receber o Ola") { bodies(chefe, conv) == listOf("Ola") }
+        assertEquals(0, ana2.store.queuedCount())
+    }
+
+    @Test
+    fun `cenario do teste no celular - servidor reinstalado com arquivos e ola na fila`() = runBlocking {
+        val (chefe, ana, conv) = family()
+        val samePort = port
+        // Servidor reinstalado (fora do ar) e Ana sem "ponte".
+        server.stop()
+        eventually("os dois caírem") {
+            chefe.connection.value != ConnectionState.ONLINE && ana.connection.value != ConnectionState.ONLINE
+        }
+        val audio = randomFile("a.m4a", 300_000, 9)
+        val pdf = randomFile("b.pdf", 9 * 1024 * 1024, 10) // 2 pedaços
+        chefe.sendMedia(conv, audio, "audio", "audio/mp4", durationMs = 5_000)
+        chefe.sendMedia(conv, pdf, "file", "application/pdf")
+        ana.send(conv, "Ola")
+        assertEquals(2, chefe.store.queuedCount())
+        assertEquals(1, ana.store.queuedCount())
+
+        startServer(samePort)
+        listOf(chefe, ana).forEach { it.reconnectNow() }
+        eventually("Ana receber os dois arquivos") { ana.store.messages(conv).count { it.attachment != null } == 2 }
+        eventually("Chefe receber o Ola") { bodies(chefe, conv).contains("Ola") }
+        eventually("filas vazias") { chefe.store.queuedCount() == 0 && ana.store.queuedCount() == 0 }
+        val recebido = ana.store.messages(conv).first { it.attachment?.kind == "file" }.attachment!!
+        kotlin.test.assertContentEquals(pdf.readBytes(), ana.mediaFile(recebido).readBytes())
+    }
+
+    @Test
+    fun `botao reconectar refaz a conexao mesmo online e entrega o que estava na fila`() = runBlocking {
+        val (chefe, ana, conv) = family()
+        chefe.send(conv, "antes")
+        eventually("Ana receber") { bodies(ana, conv) == listOf("antes") }
+        val conexoesAntes = server.recentEvents().count { it.contains("Conectado") }
+        chefe.reconnectNow(force = true)
+        // A reconexão é tão rápida que nem dá para ver o "offline": confere pelo servidor.
+        eventually("Chefe reconectar") { server.recentEvents().count { it.contains("Conectado") } > conexoesAntes }
+        eventually("Chefe voltar") { chefe.connection.value == ConnectionState.ONLINE }
+        chefe.send(conv, "depois")
+        eventually("Ana receber depois") { bodies(ana, conv) == listOf("antes", "depois") }
+        eventually("servidor ver 2 aparelhos") { server.hub.connectionCount() == 2 }
+        assertEquals(2, server.hub.connectedNames().size)
+        assertTrue(server.recentEvents().any { it.contains("Conectado") })
+    }
+
+    @Test
+    fun `miniatura vai junto e quem recebe ve a previa antes de baixar`() = runBlocking {
+        val (chefe, ana, conv) = family()
+        val foto = randomFile("foto.jpg", 50_000, 21)
+        val thumb = java.util.Base64.getEncoder().encodeToString(ByteArray(3000) { it.toByte() })
+        chefe.sendMedia(conv, foto, "image", "image/jpeg", thumb = thumb)
+        val video = randomFile("v.mp4", 60_000, 22)
+        chefe.sendMedia(conv, video, "video", "video/mp4", durationMs = 15_000, thumb = "nao e base64!!")
+        val grande = "A".repeat(app.falai.protocol.MAX_THUMB_CHARS + 4)
+        chefe.sendMedia(conv, randomFile("g.png", 1000, 23), "image", "image/png", thumb = grande)
+        eventually("Ana receber os 3") { ana.store.messages(conv).count { it.attachment != null } == 3 }
+        val recebidos = ana.store.messages(conv).mapNotNull { it.attachment }
+        assertEquals(thumb, recebidos.first { it.name == "foto.jpg" }.thumb)
+        assertEquals(null, recebidos.first { it.name == "v.mp4" }.thumb) // inválida: descartada
+        assertEquals(null, recebidos.first { it.name == "g.png" }.thumb) // grande demais: descartada
+        // A prévia já está lá, mas o arquivo em si ainda não foi baixado.
+        assertTrue(ana.store.messages(conv).all { it.localPath == null })
+    }
+
+    @Test
+    fun `tipo do arquivo aparece pela extensao ou pelo mime`() {
+        assertEquals("APK", ClientStore.typeLabel("Oxy Proxy Manager_1.0.4.apk", "application/vnd.android.package-archive"))
+        assertEquals("APK", ClientStore.typeLabel("arquivo", "application/vnd.android.package-archive"))
+        assertEquals("JPG", ClientStore.typeLabel("IMG_2026.jpeg", "image/jpeg"))
+        assertEquals("JPG", ClientStore.typeLabel("1000012345", "image/jpeg"))
+        assertEquals("PDF", ClientStore.typeLabel("boleto", "application/pdf"))
+        assertEquals("MOV", ClientStore.typeLabel("video", "video/quicktime"))
+        assertEquals("HEIC", ClientStore.typeLabel("foto", "image/heic"))
+        assertEquals("ARQUIVO", ClientStore.typeLabel("sem nome", "application/octet-stream"))
+        assertEquals("MP4", ClientStore.typeLabel("x.mp4", "video/mp4"))
     }
 }
