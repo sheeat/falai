@@ -70,7 +70,7 @@ class FalaiClient(
     /** Pasta deste aparelho onde ficam os arquivos baixados e enviados. */
     private val mediaDir: java.io.File,
     private val http: OkHttpClient = defaultHttp(),
-    private val log: (String) -> Unit = {},
+    val log: (String) -> Unit = {},
     private val reconnectDelaysMs: List<Long> = listOf(1_000, 2_000, 5_000, 10_000, 30_000),
     /** Se o servidor não disser "olá" nesse tempo, a tentativa é abandonada e refeita. */
     private val handshakeTimeoutMs: Long = 20_000,

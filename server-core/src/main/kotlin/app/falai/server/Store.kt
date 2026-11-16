@@ -487,11 +487,14 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
     }
 
     /** Quem pode baixar: quem enviou, ou quem participa de uma conversa onde o anexo apareceu. */
+    fun isAvatar(mediaId: String): Boolean =
+        db.query("SELECT 1 AS x FROM users WHERE avatar_media_id = ? LIMIT 1", mediaId).isNotEmpty()
+
     fun canDownload(mediaId: String, userId: String): Boolean {
         val m = media(mediaId) ?: return false
         if (m.uploaderId == userId) return true
         // Foto de perfil: todo mundo da família pode ver.
-        if (db.query("SELECT 1 AS x FROM users WHERE avatar_media_id = ? LIMIT 1", mediaId).isNotEmpty()) return true
+        if (isAvatar(mediaId)) return true
         return db.query(
             """SELECT 1 AS x FROM messages msg
                JOIN members mb ON mb.conversation_id = msg.conversation_id AND mb.user_id = ?

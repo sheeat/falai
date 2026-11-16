@@ -76,12 +76,24 @@ fun Avatar(name: String, size: Dp = 44.dp, client: FalaiClient? = null, mediaId:
     var photo by remember(mediaId) { mutableStateOf(mediaId?.let { AvatarCache.get(it) }) }
     if (client != null && !mediaId.isNullOrEmpty() && photo == null) {
         LaunchedEffect(mediaId) {
-            photo = withContext(Dispatchers.IO) {
-                try {
-                    loadThumbnail(client.avatarFile(mediaId), 256)?.also { AvatarCache.put(mediaId, it) }
-                } catch (e: Exception) {
-                    null // sem internet agora: fica a inicial, tenta de novo na próxima vez
+            // Sem internet agora? Fica a inicial e tenta de novo algumas vezes.
+            for (attempt in 1..6) {
+                val b = withContext(Dispatchers.IO) {
+                    try {
+                        loadThumbnail(client.avatarFile(mediaId), 256)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        client.log("Foto de perfil não carregou: ${e.message}")
+                        null
+                    }
                 }
+                if (b != null) {
+                    AvatarCache.put(mediaId, b)
+                    photo = b
+                    break
+                }
+                kotlinx.coroutines.delay(attempt * 5_000L)
             }
         }
     }

@@ -186,6 +186,8 @@ fun Route.mediaRoutes(store: Store, files: MediaFiles, log: (String) -> Unit = {
             val f = files.finalFile(id)
             if (!m.complete || !f.exists()) throw FalaiException("not_found", "Arquivo ainda não está disponível.")
             call.response.headers.append("X-Content-SHA256", m.sha256)
+            // Ajuda a achar problema: a tela do servidor mostra quem pegou fotos de perfil.
+            if (store.isAvatar(id)) log("Foto de perfil enviada para ${device.user.name}")
             call.respondFile(f)
         }
     }

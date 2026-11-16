@@ -560,4 +560,28 @@ class FalaiClientTest {
         // Outro aparelho que entra depois já vê o nome certo.
         assertEquals("Edson", chefe.store.userName(chefeId))
     }
+
+    @Test
+    fun `perfil - quem entra depois da foto tambem ve a foto`() = runBlocking {
+        val chefe = newClient("chefe")
+        chefe.pair(url, adminCode, "Celular do Chefe", "Chefe")
+        online(chefe)
+        val chefeId = chefe.account.value!!.userId
+        val foto = randomFile("eu.jpg", 4_000, 7)
+        val avatar = assertNotNull(chefe.updateProfile(photo = foto).avatarMediaId)
+        // Uma pessoa nova entra depois da foto e o chefe começa a conversa.
+        val code = chefe.createInvite().code
+        val novo = newClient("novo")
+        novo.pair(url, code, "Celular novo", "Edson 1")
+        online(novo)
+        val novoId = novo.account.value!!.userId
+        val conv = chefe.createConversation("direct", null, listOf(novoId))
+        eventually("novo ver a conversa") { novo.store.conversationSummaries(novoId).isNotEmpty() }
+        assertEquals(avatar, novo.store.user(chefeId)?.avatarMediaId)
+        assertEquals(avatar, novo.store.conversationSummaries(novoId).first { it.id == conv.id }.avatarMediaId)
+        kotlin.test.assertContentEquals(foto.readBytes(), novo.avatarFile(avatar).readBytes())
+        // E a conversa começada pelo novo também.
+        val conv2 = novo.createConversation("direct", null, listOf(chefeId))
+        assertEquals(avatar, novo.store.conversationSummaries(novoId).first { it.id == conv2.id }.avatarMediaId)
+    }
 }
