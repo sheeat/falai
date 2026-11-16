@@ -328,6 +328,8 @@ class FalaiClient(
                 }
                 _publicBase.value = f.publicBase
                 _turnConfigured.value = f.turnConfigured
+                // Chamadas: o servidor manda logo em seguida as que ainda estão em andamento.
+                _callEvents.tryEmit(f)
                 _connection.value = ConnectionState.ONLINE
                 sendFrame(ws, ListUsersFrame("hello-users"))
                 sendFrame(ws, SyncFrame(store.syncedSeq()))

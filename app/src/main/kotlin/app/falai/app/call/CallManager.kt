@@ -185,6 +185,7 @@ class CallManager(private val app: Application, private val client: FalaiClient,
             client.callEvents.collect { f ->
                 launchCall {
                     when (f) {
+                        is app.falai.protocol.HelloFrame -> onReconnected()
                         is CallRingFrame -> onRing(f.call)
                         is CallStateFrame -> onState(f.call)
                         is CallSignalInFrame -> onSignal(f)
@@ -302,6 +303,8 @@ class CallManager(private val app: Application, private val client: FalaiClient,
             apply(c, dto)
             sendMedia(c) // conta se a câmera/microfone abriram de verdade
         } catch (e: Exception) {
+            // A chamada já tinha acabado (eu estava sem conexão quando terminou): some o "em andamento".
+            if ((e as? app.falai.client.FalaiClientException)?.code == "not_found") byConversation.remove(call.conversationId)
             finish(e.message ?: "Não consegui entrar na chamada.")
         }
     }
@@ -342,7 +345,29 @@ class CallManager(private val app: Application, private val client: FalaiClient,
 
     // ---------- Novidades do servidor ----------
 
+    /** Chamadas que o servidor confirmou desde a última reconexão. */
+    private val confirmed = HashSet<String>()
+    private var helloEpoch = 0
+
+    /**
+     * Reconectou (ex.: a internet caiu no meio da chamada). O servidor manda de novo as chamadas
+     * que continuam; o que ele não mandar em alguns segundos já terminou enquanto eu estava fora.
+     */
+    private fun onReconnected() {
+        byConversation.clear()
+        confirmed.clear()
+        val epoch = ++helloEpoch
+        publish()
+        scope.launch(dispatcher) {
+            kotlinx.coroutines.delay(4000)
+            if (helloEpoch != epoch) return@launch
+            ringingCall?.let { if (it.id !in confirmed) stopRinging() }
+            s?.let { c -> val id = c.id; if (id != null && id !in confirmed) finish("A chamada terminou enquanto você estava sem conexão.") }
+        }
+    }
+
     private fun onRing(dto: CallDto) {
+        confirmed += dto.id
         byConversation[dto.conversationId] = dto
         val c = s
         if (c != null) {
@@ -357,6 +382,7 @@ class CallManager(private val app: Application, private val client: FalaiClient,
     }
 
     private fun onState(dto: CallDto) {
+        confirmed += dto.id
         if (dto.ended) byConversation.remove(dto.conversationId) else byConversation[dto.conversationId] = dto
         val ring = ringingCall
         if (ring != null && ring.id == dto.id) {

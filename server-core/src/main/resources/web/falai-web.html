@@ -625,6 +625,7 @@
         state.retry = 0;
         state.me = f.user;
         state.deviceId = f.deviceId;
+        if (typeof Calls !== "undefined" && Calls) Calls.onReconnected();
         state.users[f.user.id] = f.user;
         f.conversations.forEach(function (c) { state.convs[c.id] = c; });
         setAvatar($("meAvatar"), f.user.name, f.user.avatarMediaId);
@@ -1724,7 +1725,11 @@
         others(f.call).forEach(function (p) { createPeer(p.deviceId, p.userId, true); });
         apply(f.call);
         sendMedia(); // conta se a câmera/microfone abriram de verdade
-      } catch (e) { finish(e.message || "Não consegui entrar na chamada."); }
+      } catch (e) {
+        // A chamada já tinha acabado (eu estava sem conexão quando terminou): some o "em andamento".
+        if (active[dto.conversationId] && active[dto.conversationId].id === dto.id) delete active[dto.conversationId];
+        finish(e.message || "Não consegui entrar na chamada.");
+      }
     }
 
     function hangup() {
@@ -1762,7 +1767,21 @@
       renderCall();
     }
 
+    // Reconectou: o servidor manda de novo as chamadas que continuam; o resto já acabou.
+    var confirmed = {}, helloEpoch = 0;
+    function onReconnected() {
+      active = {}; confirmed = {};
+      var epoch = ++helloEpoch;
+      renderChatHeader();
+      setTimeout(function () {
+        if (epoch !== helloEpoch) return;
+        if (ringing && !confirmed[ringing.id]) stopRinging(null);
+        if (cur && cur.id && !confirmed[cur.id]) finish("A chamada terminou enquanto você estava sem conexão.");
+      }, 4000);
+    }
+
     function onRing(dto) {
+      confirmed[dto.id] = true;
       active[dto.conversationId] = dto;
       renderChatHeader();
       if (cur) { if (cur.id !== dto.id) send({ type: "call_decline", callId: dto.id, busy: true }); return; }
@@ -1797,6 +1816,7 @@
     }
 
     function onState(dto) {
+      confirmed[dto.id] = true;
       if (dto.ended) delete active[dto.conversationId]; else active[dto.conversationId] = dto;
       if (ringing && ringing.id === dto.id) {
         var me = state.me && state.me.id;
@@ -2066,7 +2086,7 @@
       join: function (cid, video) { if (active[cid]) join(active[cid], video); },
       activeIn: function (cid) { var d = active[cid]; return d && !d.ended ? d : null; },
       inCall: function (cid) { return !!cur && (!cid || cur.conversationId === cid); },
-      onRing: onRing, onState: onState, onSignal: onSignal,
+      onRing: onRing, onState: onState, onSignal: onSignal, onReconnected: onReconnected,
       // Para os testes automáticos.
       debug: function () {
         return cur ? { id: cur.id, answered: cur.answered, connected: !!cur.connectedAt, screen: !!cur.screen, cam: !!cur.cam, micOn: cur.micOn,
