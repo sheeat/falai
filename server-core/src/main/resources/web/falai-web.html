@@ -1660,7 +1660,7 @@
       if (!md || !md.getUserMedia) { toast("Este navegador não faz chamadas. Use o Chrome, Edge ou Firefox atualizado."); return null; }
       var audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
       try {
-        return await md.getUserMedia({ audio: audio, video: video ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false });
+        return await md.getUserMedia({ audio: audio, video: video ? { width: { ideal: 960 }, height: { ideal: 540 }, frameRate: { ideal: 24 } } : false });
       } catch (e) {
         if (!video) { toast(mediaError(e, false) + " Você vai só escutar."); return new MediaStream(); }
         try {
@@ -1763,6 +1763,7 @@
       Object.keys(cur.peers).forEach(function (d) {
         if (!ids[d]) { try { cur.peers[d].pc.close(); } catch (e) {} delete cur.peers[d]; }
       });
+      tuneAll();
       if (dto.participants.length >= 2 && !cur.answered) { cur.answered = true; stopRing(); }
       renderCall();
     }
@@ -1869,9 +1870,39 @@
       peer.chain = peer.chain.then(async function () {
         var o = await peer.pc.createOffer(restart ? { iceRestart: true } : {});
         await peer.pc.setLocalDescription(o);
+        tune(peer);
         sig(peer.deviceId, "offer", { type: "offer", sdp: o.sdp });
       }).catch(function (e) { console.warn("oferta", e); });
     }
+
+    // Prioridade para a voz e limite para o vídeo (no 4G, sem isso a voz picota e a tela atrasa).
+    function tune(peer) {
+      if (!cur) return;
+      try {
+        if (peer.audio) {
+          var pa = peer.audio.getParameters();
+          if (pa.encodings && pa.encodings.length) {
+            pa.encodings.forEach(function (e) { e.priority = "high"; e.networkPriority = "high"; });
+            peer.audio.setParameters(pa).catch(function () {});
+          }
+        }
+        if (peer.video) {
+          var pv = peer.video.getParameters();
+          if (pv.encodings && pv.encodings.length) {
+            var screen = !!cur.screen;
+            var n = Math.max(1, Object.keys(cur.peers).length);
+            pv.degradationPreference = screen ? "maintain-resolution" : "balanced";
+            pv.encodings.forEach(function (e) {
+              e.maxBitrate = Math.max(250000, (screen ? 1200000 : 800000) / n);
+              e.maxFramerate = screen ? 8 : 24;
+              e.priority = "low";
+            });
+            peer.video.setParameters(pv).catch(function () {});
+          }
+        }
+      } catch (e) { /* navegador antigo: segue sem ajuste */ }
+    }
+    function tuneAll() { if (cur) Object.keys(cur.peers).forEach(function (d) { tune(cur.peers[d]); }); }
 
     async function flushIce(peer) {
       var list = peer.pendingIce; peer.pendingIce = [];
@@ -1903,6 +1934,7 @@
           });
           var a = await peer.pc.createAnswer();
           await peer.pc.setLocalDescription(a);
+          tune(peer);
           sig(peer.deviceId, "answer", { type: "answer", sdp: a.sdp });
           await flushIce(peer);
         }).catch(function (e) { console.warn("resposta", e); });
@@ -1923,7 +1955,7 @@
     }
     function setVideoTrack() {
       var t = videoTrack();
-      Object.keys(cur.peers).forEach(function (d) { var p = cur.peers[d]; if (p.video) p.video.replaceTrack(t).catch(function () {}); });
+      Object.keys(cur.peers).forEach(function (d) { var p = cur.peers[d]; if (p.video) p.video.replaceTrack(t).then(function () { tune(p); }).catch(function () {}); });
       renderCall();
     }
     function toggleMic() {
@@ -1938,7 +1970,7 @@
       if (cur.cam) { cur.cam.stop(); cur.cam = null; }
       else {
         try {
-          var s = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } } });
+          var s = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 960 }, height: { ideal: 540 }, frameRate: { ideal: 24 } } });
           if (!cur) { s.getTracks().forEach(function (t) { t.stop(); }); return; }
           cur.cam = s.getVideoTracks()[0];
         } catch (e) { toast(mediaError(e, true).replace("o microfone e a câmera", "a câmera")); return; }
@@ -1950,7 +1982,7 @@
       if (cur.screen) { stopScreen(); return; }
       if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) { toast("Este navegador não mostra a tela. Use o Chrome ou o Edge no computador."); return; }
       try {
-        var s = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15 } }, audio: false });
+        var s = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 8, max: 10 }, width: { max: 1600 }, height: { max: 1000 } }, audio: false });
         if (!cur) { s.getTracks().forEach(function (t) { t.stop(); }); return; }
         cur.screen = s.getVideoTracks()[0];
         try { cur.screen.contentHint = "detail"; } catch (e) {}
@@ -2091,6 +2123,8 @@
       debug: function () {
         return cur ? { id: cur.id, answered: cur.answered, connected: !!cur.connectedAt, screen: !!cur.screen, cam: !!cur.cam, micOn: cur.micOn,
           peers: Object.keys(cur.peers).map(function (d) { var p = cur.peers[d]; return { deviceId: d, state: p.pc.connectionState,
+            maxBitrate: p.video && p.video.getParameters().encodings && p.video.getParameters().encodings[0] ? p.video.getParameters().encodings[0].maxBitrate : null,
+            audioPriority: p.audio && p.audio.getParameters().encodings && p.audio.getParameters().encodings[0] ? p.audio.getParameters().encodings[0].networkPriority : null,
             tracks: p.stream.getTracks().map(function (t) { return t.kind + ":" + t.readyState + (t.muted ? ":muted" : ""); }) }; }) } : null;
       }
     };

@@ -60,6 +60,7 @@ import org.webrtc.MediaStream
 import org.webrtc.MediaStreamTrack
 import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
+import org.webrtc.RtpParameters
 import org.webrtc.RtpReceiver
 import org.webrtc.RtpSender
 import org.webrtc.RtpTransceiver
@@ -417,6 +418,7 @@ class CallManager(private val app: Application, private val client: FalaiClient,
         if (dto.participants.none { it.deviceId == myDevice() }) { finish("A chamada continuou em outro aparelho."); return }
         val ids = dto.participants.map { it.deviceId }.toSet()
         c.peers.keys.filter { it !in ids }.forEach { d -> c.peers.remove(d)?.let { runCatching { it.pc.dispose() } }; c.videoVersion++ }
+        tuneAll(c)
         if (dto.participants.size >= 2 && !c.answered) {
             c.answered = true
             stopRingback()
@@ -520,10 +522,48 @@ class CallManager(private val app: Application, private val client: FalaiClient,
         return peer
     }
 
+    /**
+     * Prioridade para a voz e limite para o vídeo: no 4G a internet é curta, e sem isso o vídeo
+     * (principalmente a tela) ocupa tudo, a voz picota e a imagem atrasa.
+     * Só funciona depois da negociação (antes disso não há "encodings").
+     */
+    private fun tune(c: Session, peer: Peer) {
+        runCatching {
+            peer.audioSender?.let { sender ->
+                val p = sender.parameters
+                if (p.encodings.isNotEmpty()) {
+                    p.encodings.forEach { it.bitratePriority = 4.0; it.networkPriority = 3 /* alta */ }
+                    sender.parameters = p
+                }
+            }
+        }
+        runCatching {
+            peer.videoSender?.let { sender ->
+                val p = sender.parameters
+                if (p.encodings.isEmpty()) return@let
+                val screen = c.screenTrack != null
+                // Em grupo, cada um manda uma cópia para cada pessoa: divide a internet.
+                val others = maxOf(1, c.peers.size)
+                val budget = if (screen) 1_200_000 else 800_000
+                p.degradationPreference = if (screen) RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
+                    else RtpParameters.DegradationPreference.BALANCED
+                p.encodings.forEach {
+                    it.maxBitrateBps = maxOf(250_000, budget / others)
+                    it.maxFramerate = if (screen) 8 else 24
+                    it.bitratePriority = 1.0
+                }
+                sender.parameters = p
+            }
+        }
+    }
+
+    private fun tuneAll(c: Session) = c.peers.values.forEach { tune(c, it) }
+
     private suspend fun offer(c: Session, peer: Peer, constraints: MediaConstraints) {
         try {
             val o = peer.pc.createOfferAwait(constraints)
             peer.pc.setLocalAwait(o)
+            tune(c, peer)
             sig(c, peer.deviceId, "offer", buildJsonObject { put("type", "offer"); put("sdp", o.description) })
         } catch (e: Exception) {
             client.log("Chamada: oferta falhou: ${e.message}")
@@ -567,6 +607,7 @@ class CallManager(private val app: Application, private val client: FalaiClient,
                 }
                 val answer = peer.pc.createAnswerAwait(MediaConstraints())
                 peer.pc.setLocalAwait(answer)
+                tune(c, peer)
                 sig(c, peer.deviceId, "answer", buildJsonObject { put("type", "answer"); put("sdp", answer.description) })
                 peer.pendingIce.forEach { peer.pc.addIceCandidate(it) }
                 peer.pendingIce.clear()
@@ -614,7 +655,7 @@ class CallManager(private val app: Application, private val client: FalaiClient,
             val helper = SurfaceTextureHelper.create("falai-cam", eglBase.eglBaseContext)
             val source = factory.createVideoSource(false)
             capturer.initialize(helper, app, source.capturerObserver)
-            capturer.startCapture(1280, 720, 30)
+            capturer.startCapture(960, 540, 24)
             c.camCapturer = capturer
             c.camHelper = helper
             c.camSource = source
@@ -643,6 +684,7 @@ class CallManager(private val app: Application, private val client: FalaiClient,
     private fun setVideoOnPeers(c: Session) {
         val t = c.screenTrack ?: c.camTrack
         for (p in c.peers.values) runCatching { p.videoSender?.setTrack(t, false) }
+        tuneAll(c)
         c.videoVersion++
     }
 
@@ -708,7 +750,7 @@ class CallManager(private val app: Application, private val client: FalaiClient,
             val source = factory.createVideoSource(true)
             capturer.initialize(helper, app, source.capturerObserver)
             val (w, h) = screenSize()
-            capturer.startCapture(w, h, 15)
+            capturer.startCapture(w, h, 10)
             c.screenCapturer = capturer
             c.screenHelper = helper
             c.screenSource = source
