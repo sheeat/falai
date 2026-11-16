@@ -542,6 +542,8 @@ class FalaiClientTest {
         val foto = randomFile("eu.jpg", 40_000, 31)
         val u = chefe.updateProfile(name = "  Edson  ", photo = foto)
         assertEquals("Edson", u.name)
+        // A tela do servidor mostra o nome novo de quem está conectado.
+        assertTrue(server.hub.connectedNames().any { it.startsWith("Edson (") }, "${server.hub.connectedNames()}")
         val avatar = assertNotNull(u.avatarMediaId)
         // Ana recebe a mudança sem precisar reconectar.
         eventually("Ana ver o nome novo") { ana.store.userName(chefeId) == "Edson" }
