@@ -163,9 +163,12 @@ class FalaiClient(
         _connection.value = ConnectionState.OFFLINE
     }
 
-    /** Força uma reconexão imediata (ex.: a internet voltou). */
-    fun reconnectNow() {
-        if (_connection.value != ConnectionState.ONLINE) socket?.cancel()
+    /**
+     * Força uma reconexão imediata (ex.: a internet voltou).
+     * [force] = true (botão "Reconectar"): derruba e refaz a conexão mesmo se parecer online.
+     */
+    fun reconnectNow(force: Boolean = false) {
+        if (force || _connection.value != ConnectionState.ONLINE) socket?.cancel()
         wake.trySend(Unit)
         uploadWake.trySend(Unit)
     }
@@ -418,6 +421,13 @@ class FalaiClient(
                     log("Envio de arquivo interrompido: ${e.message}")
                     _lastError.value = "Arquivo esperando conexão para subir (${e.message ?: "sem rede"})."
                     false
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // Qualquer outro problema: mostra o motivo e tenta de novo, sem parar a fila.
+                    log("Envio de arquivo com erro inesperado: $e")
+                    _lastError.value = "Envio de arquivo: erro inesperado (${e.message ?: e.javaClass.simpleName})."
+                    false
                 }
                 if (!ok) {
                     // Sem conexão: tenta de novo daqui a pouco (ou quando reconectar).
@@ -486,6 +496,7 @@ class FalaiClient(
 
         store.markUploaded(o.messageId, status.mediaId)
         _uploadProgress.value = _uploadProgress.value - o.messageId
+        if (_lastError.value?.contains("arquivo", ignoreCase = true) == true) _lastError.value = null
         bump()
         val m = store.messageById(o.messageId)
         if (m != null && _connection.value == ConnectionState.ONLINE) {

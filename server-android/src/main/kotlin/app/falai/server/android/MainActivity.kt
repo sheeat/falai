@@ -39,12 +39,12 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(pad, pad, pad, pad)
         }
-        status = TextView(this).apply { textSize = 18f; gravity = Gravity.START }
+        status = TextView(this).apply { textSize = 16f; gravity = Gravity.START }
         root.addView(status)
         root.addView(button("Ligar servidor") { ServerService.start(this) })
         root.addView(button("Desligar servidor") { ServerService.stop(this) })
         root.addView(button("Não otimizar bateria (recomendado)") { askIgnoreBatteryOptimizations() })
-        setContentView(root)
+        setContentView(android.widget.ScrollView(this).apply { addView(root) })
 
         ServerService.start(this)
     }
@@ -63,7 +63,12 @@ class MainActivity : Activity() {
         val battery = if (pm.isIgnoringBatteryOptimizations(packageName)) "liberada" else "OTIMIZADA (pode desligar o servidor)"
         status.text = buildString {
             appendLine(if (running) "✅ Servidor ligado em 127.0.0.1:${ServerService.PORT}" else "⛔ Servidor desligado")
-            ServerService.current?.let { appendLine("📱 Aparelhos conectados agora: ${it.hub.connectionCount()}") }
+            val version = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull()
+            appendLine("Versão do servidor: $version")
+            ServerService.current?.let { srv ->
+                appendLine("📱 Aparelhos conectados agora: ${srv.hub.connectionCount()}")
+                srv.hub.connectedNames().forEach { appendLine("   • $it") }
+            }
             ServerService.currentMediaDir?.let { appendLine("🗂️ Arquivos em: $it") }
             if (adminCode != null) {
                 appendLine()
@@ -73,6 +78,12 @@ class MainActivity : Activity() {
             if (error != null) { appendLine(); appendLine("Erro: $error") }
             appendLine()
             appendLine("Bateria: $battery")
+            val events = ServerService.current?.recentEvents().orEmpty()
+            if (events.isNotEmpty()) {
+                appendLine()
+                appendLine("Últimos acontecimentos:")
+                events.takeLast(8).forEach { appendLine(it) }
+            }
         }
     }
 

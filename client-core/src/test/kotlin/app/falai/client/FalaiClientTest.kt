@@ -416,4 +416,19 @@ class FalaiClientTest {
         val recebido = ana.store.messages(conv).first { it.attachment?.kind == "file" }.attachment!!
         kotlin.test.assertContentEquals(pdf.readBytes(), ana.mediaFile(recebido).readBytes())
     }
+
+    @Test
+    fun `botao reconectar refaz a conexao mesmo online e entrega o que estava na fila`() = runBlocking {
+        val (chefe, ana, conv) = family()
+        chefe.send(conv, "antes")
+        eventually("Ana receber") { bodies(ana, conv) == listOf("antes") }
+        chefe.reconnectNow(force = true)
+        eventually("Chefe cair") { chefe.connection.value != ConnectionState.ONLINE }
+        eventually("Chefe voltar") { chefe.connection.value == ConnectionState.ONLINE }
+        chefe.send(conv, "depois")
+        eventually("Ana receber depois") { bodies(ana, conv) == listOf("antes", "depois") }
+        eventually("servidor ver 2 aparelhos") { server.hub.connectionCount() == 2 }
+        assertEquals(2, server.hub.connectedNames().size)
+        assertTrue(server.recentEvents().any { it.contains("Conectado") })
+    }
 }

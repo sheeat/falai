@@ -112,10 +112,11 @@ private fun mediaOwnedBy(store: Store, id: String, device: AuthedDevice): Store.
     return m
 }
 
-private suspend fun ApplicationCall.guard(block: suspend () -> Unit) {
+private suspend fun ApplicationCall.guard(log: (String) -> Unit, block: suspend () -> Unit) {
     try {
         block()
     } catch (e: FalaiException) {
+        if (e.code != "wrong_offset") log("Arquivo recusado: ${e.code} ${e.message}")
         respondError(e)
     } catch (e: SerializationException) {
         respondError(FalaiException("invalid", "Pedido mal formado."))
@@ -123,7 +124,7 @@ private suspend fun ApplicationCall.guard(block: suspend () -> Unit) {
         respondError(FalaiException("invalid", "Pedido mal formado."))
     } catch (e: Exception) {
         // Erro inesperado (ex.: cartão de memória cheio ou sem permissão): explica em vez de só "500".
-        System.err.println("[falai] Erro na mídia: $e")
+        log("Erro no envio de arquivo: $e")
         respondJson(
             FalaiJson.encodeToString(ErrorResponse.serializer(), ErrorResponse("server_error", "Erro no servidor: ${e.message ?: e.javaClass.simpleName}")),
             HttpStatusCode.InternalServerError,
@@ -145,9 +146,9 @@ private suspend fun ApplicationCall.readBodyLimited(limit: Int): ByteArray = wit
     out.toByteArray()
 }
 
-fun Route.mediaRoutes(store: Store, files: MediaFiles) {
+fun Route.mediaRoutes(store: Store, files: MediaFiles, log: (String) -> Unit = {}) {
     post("/api/media") {
-        call.guard {
+        call.guard(log) {
             val device = call.authed(store)
             val req = FalaiJson.decodeFromString(MediaCreateRequest.serializer(), call.receiveText())
             val m = store.createMedia(device.user.id, req)
@@ -156,7 +157,7 @@ fun Route.mediaRoutes(store: Store, files: MediaFiles) {
     }
 
     get("/api/media/{id}/status") {
-        call.guard {
+        call.guard(log) {
             val device = call.authed(store)
             val m = mediaOwnedBy(store, call.parameters["id"]!!, device)
             call.respondJson(FalaiJson.encodeToString(MediaStatus.serializer(), m.status()))
@@ -164,7 +165,7 @@ fun Route.mediaRoutes(store: Store, files: MediaFiles) {
     }
 
     put("/api/media/{id}") {
-        call.guard {
+        call.guard(log) {
             val device = call.authed(store)
             val m = mediaOwnedBy(store, call.parameters["id"]!!, device)
             val offset = call.request.queryParameters["offset"]?.toLongOrNull()
@@ -177,7 +178,7 @@ fun Route.mediaRoutes(store: Store, files: MediaFiles) {
     }
 
     get("/api/media/{id}") {
-        call.guard {
+        call.guard(log) {
             val device = call.authed(store)
             val id = call.parameters["id"]!!
             if (!store.canDownload(id, device.user.id)) throw FalaiException("not_found", "Arquivo não encontrado.")

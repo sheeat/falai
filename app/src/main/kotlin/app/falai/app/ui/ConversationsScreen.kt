@@ -48,6 +48,10 @@ fun ConversationsScreen(
     val lastError by client.lastError.collectAsState()
     val me = account?.userId ?: return
     val list = remember(changes) { client.store.conversationSummaries(me) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val appVersion = remember {
+        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "?"
+    }
 
     Box(Modifier.fillMaxSize().background(Color.White)) {
         Column(Modifier.fillMaxSize()) {
@@ -66,7 +70,11 @@ fun ConversationsScreen(
                         TextButton(onClick = onInvite) { Text("Convidar", color = Color.White) }
                     }
                 }
-                ConnectionBadge(state)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    ConnectionBadge(state)
+                    Spacer(Modifier.weight(1f))
+                    Text("v$appVersion", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+                }
             }
 
             // Quando algo não vai bem, mostra o motivo e um botão para tentar na hora.
@@ -80,9 +88,12 @@ fun ConversationsScreen(
                         if (queued > 0) Text("🕓 $queued na fila para enviar", fontSize = 13.sp)
                         if (state != app.falai.client.ConnectionState.ONLINE) {
                             Text(lastError ?: "Sem conexão com o servidor.", fontSize = 12.sp, color = FalaiColors.TextSec)
+                        } else if (lastError != null) {
+                            // Online, mas algo não sobe: mostra o motivo.
+                            Text(lastError!!, fontSize = 12.sp, color = FalaiColors.TextSec)
                         }
                     }
-                    TextButton(onClick = { client.reconnectNow() }) { Text("Reconectar") }
+                    TextButton(onClick = { client.reconnectNow(force = true) }) { Text("Reconectar") }
                 }
             }
 
