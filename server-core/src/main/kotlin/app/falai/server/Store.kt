@@ -321,6 +321,25 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         userById(userId) ?: throw FalaiException("not_found", "Pessoa não encontrada.")
     }
 
+    // ---------- Falaí no computador ----------
+
+    /** Liga um aparelho novo (o navegador) à pessoa, sem convite: ela aprovou pelo celular. */
+    fun createLinkedDevice(userId: String, name: String): Pair<String, String> {
+        userById(userId) ?: throw FalaiException("not_found", "Pessoa não encontrada.")
+        val token = newToken()
+        val deviceId = newId()
+        db.execute(
+            "INSERT INTO devices (id, user_id, name, token_hash, created_at) VALUES (?, ?, ?, ?, ?)",
+            deviceId, userId, name.take(60), sha256(token), clock(),
+        )
+        return deviceId to token
+    }
+
+    /** Desliga um aparelho: o token dele para de funcionar na hora. */
+    fun revokeDevice(deviceId: String) {
+        db.update("UPDATE devices SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL", clock(), deviceId)
+    }
+
     // ---------- Conversas ----------
 
     fun createConversation(by: UserDto, kind: String, title: String?, otherMemberIds: List<String>): ConversationDto =

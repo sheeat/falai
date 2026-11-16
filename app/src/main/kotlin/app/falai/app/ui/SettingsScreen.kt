@@ -58,7 +58,7 @@ import kotlinx.coroutines.withContext
  * Tudo que muda aqui a família vê na hora.
  */
 @Composable
-fun SettingsScreen(client: FalaiClient, onBack: () -> Unit, onInvite: () -> Unit) {
+fun SettingsScreen(client: FalaiClient, onBack: () -> Unit, onInvite: () -> Unit, onWebLink: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val changes by client.changes.collectAsState()
@@ -182,6 +182,13 @@ fun SettingsScreen(client: FalaiClient, onBack: () -> Unit, onInvite: () -> Unit
                     it, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
                     color = if (it.endsWith("✔")) FalaiColors.Online else FalaiColors.Error,
                 )
+            }
+
+            // ---- Computador ----
+            HorizontalDivider(color = FalaiColors.Divider)
+            Text("Computador", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+            OutlinedButton(onClick = onWebLink, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                Text("💻  Falaí no computador")
             }
 
             if (acc.isAdmin) {

@@ -22,6 +22,7 @@ import app.falai.app.ui.InviteScreen
 import app.falai.app.ui.NewConversationScreen
 import app.falai.app.ui.PairScreen
 import app.falai.app.ui.SettingsScreen
+import app.falai.app.ui.WebLinkScreen
 
 class MainActivity : ComponentActivity() {
     /** Convite que chegou por link (falai://convite?...), para preencher a tela de entrada. */
@@ -87,9 +88,9 @@ class MainActivity : ComponentActivity() {
 /** Navegação simples entre as telas, sem biblioteca extra. */
 @Composable
 private fun Navigation(client: app.falai.client.FalaiClient) {
-    // "lista" | "nova" | "convite" | "ajustes" | "chat:<id>"
+    // "lista" | "nova" | "convite" | "ajustes" | "computador" | "chat:<id>"
     var route by rememberSaveable { mutableStateOf("lista") }
-    BackHandler(enabled = route != "lista") { route = "lista" }
+    BackHandler(enabled = route != "lista") { route = if (route == "computador") "ajustes" else "lista" }
     when {
         route == "nova" -> NewConversationScreen(
             client,
@@ -97,7 +98,10 @@ private fun Navigation(client: app.falai.client.FalaiClient) {
             onCreated = { route = "chat:$it" },
         )
         route == "convite" -> InviteScreen(client, onBack = { route = "lista" })
-        route == "ajustes" -> SettingsScreen(client, onBack = { route = "lista" }, onInvite = { route = "convite" })
+        route == "ajustes" -> SettingsScreen(
+            client, onBack = { route = "lista" }, onInvite = { route = "convite" }, onWebLink = { route = "computador" },
+        )
+        route == "computador" -> WebLinkScreen(client, onBack = { route = "ajustes" })
         route.startsWith("chat:") -> ChatScreen(
             client,
             conversationId = route.removePrefix("chat:"),

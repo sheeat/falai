@@ -1,0 +1,1523 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Falaí</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23C8553D'/%3E%3Ctext x='32' y='43' font-size='32' text-anchor='middle' fill='white' font-family='sans-serif' font-weight='bold'%3EF%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --primary: #C8553D; --primary-dark: #A5402B; --chat-bg: #F6F1EA; --out: #FFE1D3; --in: #FFFFFF;
+    --text: #2B2522; --text-sec: #6B6460; --divider: #EAE4DE; --online: #2E9E5B; --warning: #D08A00; --error: #C62828;
+    --panel: #FFFFFF; --hover: #F7F2EE; --sel: #FBEAE4;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--text); background: #EDE6DF; }
+  button { font: inherit; cursor: pointer; }
+  .hidden { display: none !important; }
+
+  /* ---------- Ligar pelo QR Code ---------- */
+  #login { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 24px 16px; }
+  .card { background: var(--panel); border-radius: 16px; box-shadow: 0 6px 30px rgba(0,0,0,.08); padding: 32px; max-width: 760px; width: 100%;
+          display: grid; grid-template-columns: 1fr 280px; gap: 32px; align-items: center; }
+  .card h1 { margin: 0 0 6px; font-size: 26px; }
+  .card .brand { color: var(--primary); font-weight: 800; font-size: 15px; letter-spacing: .5px; margin-bottom: 18px; }
+  .card ol { padding-left: 22px; margin: 18px 0; line-height: 1.7; font-size: 16px; }
+  .card .hint { color: var(--text-sec); font-size: 14px; line-height: 1.5; }
+  #qr { width: 280px; height: 280px; border-radius: 12px; border: 1px solid var(--divider); padding: 8px; background: #fff; position: relative; }
+  #qr svg { width: 100%; height: 100%; display: block; }
+  #qr .over { position: absolute; inset: 0; background: rgba(255,255,255,.94); display: flex; flex-direction: column; align-items: center;
+              justify-content: center; gap: 12px; border-radius: 12px; text-align: center; padding: 16px; }
+  #code { text-align: center; margin-top: 10px; color: var(--text-sec); font-size: 14px; }
+  #code b { font-size: 20px; letter-spacing: 3px; color: var(--text); font-family: ui-monospace, monospace; }
+  .btn { background: var(--primary); color: #fff; border: 0; border-radius: 22px; padding: 10px 20px; font-weight: 600; }
+  .btn:hover { background: var(--primary-dark); }
+  .btn.ghost { background: transparent; color: var(--primary); border: 1px solid var(--primary); }
+  @media (max-width: 720px) { .card { grid-template-columns: 1fr; padding: 20px; } #qr { margin: 0 auto; } }
+
+  /* ---------- Conversas ---------- */
+  #app { height: 100%; display: grid; grid-template-columns: 360px 1fr; max-width: 1600px; margin: 0 auto; background: var(--panel); }
+  #side { border-right: 1px solid var(--divider); display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .topbar { background: var(--primary); color: #fff; padding: 12px 14px; display: flex; align-items: center; gap: 10px; min-height: 64px; }
+  .topbar .title { font-size: 20px; font-weight: 800; }
+  .topbar .grow { flex: 1; min-width: 0; }
+  .topbar button.icon { background: transparent; border: 0; color: #fff; border-radius: 50%; width: 40px; height: 40px; font-size: 18px; }
+  .topbar button.icon:hover { background: rgba(255,255,255,.15); }
+  .topbar button.textbtn { background: rgba(255,255,255,.15); border: 0; color: #fff; border-radius: 16px; padding: 6px 14px; font-weight: 600; }
+  .topbar button.textbtn:hover { background: rgba(255,255,255,.25); }
+  .status { font-size: 12px; opacity: .9; display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warning); display: inline-block; }
+  .dot.on { background: var(--online); }
+  #search { margin: 8px 10px; padding: 9px 14px; border-radius: 20px; border: 1px solid var(--divider); background: var(--hover); font: inherit; outline: none; }
+  #convs { overflow-y: auto; flex: 1; }
+  .conv { display: flex; gap: 12px; align-items: center; padding: 10px 14px; cursor: pointer; border-bottom: 1px solid var(--divider); }
+  .conv:hover { background: var(--hover); }
+  .conv.sel { background: var(--sel); }
+  .conv .mid { flex: 1; min-width: 0; }
+  .conv .row1 { display: flex; gap: 8px; align-items: baseline; }
+  .conv .name { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conv .time { font-size: 12px; color: var(--text-sec); }
+  .conv .last { font-size: 14px; color: var(--text-sec); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .badge { background: var(--primary); color: #fff; border-radius: 10px; font-size: 12px; padding: 1px 7px; font-weight: 700; }
+  .avatar { width: 46px; height: 46px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
+            color: #fff; font-weight: 700; font-size: 19px; overflow: hidden; }
+  .avatar img { width: 100%; height: 100%; object-fit: cover; }
+  .avatar.small { width: 38px; height: 38px; font-size: 16px; }
+  .empty { padding: 32px; color: var(--text-sec); text-align: center; line-height: 1.6; }
+
+  #main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--chat-bg); }
+  #welcome { flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; color: var(--text-sec); gap: 8px; text-align: center; padding: 24px; }
+  #welcome .big { font-size: 56px; }
+  #chat { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  #messages { flex: 1; overflow-y: auto; padding: 14px 6%; display: flex; flex-direction: column; gap: 4px; }
+  .day { align-self: center; background: rgba(255,255,255,.85); color: var(--text-sec); font-size: 12px; padding: 3px 10px; border-radius: 8px; margin: 8px 0; }
+  .msg { max-width: min(560px, 75%); border-radius: 12px; padding: 6px 9px; background: var(--in); align-self: flex-start;
+         box-shadow: 0 1px 1px rgba(0,0,0,.05); overflow-wrap: anywhere; }
+  .msg.mine { background: var(--out); align-self: flex-end; }
+  .msg .author { color: var(--primary); font-weight: 600; font-size: 13px; }
+  .msg .body { white-space: pre-wrap; font-size: 15px; line-height: 1.4; }
+  .msg .body a { color: #1a5fb4; }
+  .msg .meta { text-align: right; font-size: 11px; color: var(--text-sec); margin-top: 2px; }
+  .msg.failed .meta { color: var(--error); }
+  .msg img.media, .msg video.media { display: block; max-width: 100%; max-height: 360px; border-radius: 8px; cursor: zoom-in; background: #3A3330; }
+  .msg video.media { cursor: default; }
+  .msg audio { width: 280px; max-width: 100%; display: block; }
+  .file { display: flex; gap: 10px; align-items: center; background: rgba(0,0,0,.04); border-radius: 8px; padding: 8px; text-decoration: none; color: inherit; min-width: 240px; }
+  .file .ext { width: 44px; height: 50px; border-radius: 6px; background: var(--primary); color: #fff; font-weight: 700; font-size: 12px;
+               display: flex; align-items: center; justify-content: center; flex: none; }
+  .file .fname { font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+  .file .fsize { font-size: 12px; color: var(--text-sec); }
+  .progress { height: 4px; background: rgba(0,0,0,.1); border-radius: 2px; margin-top: 6px; overflow: hidden; }
+  .progress div { height: 100%; background: var(--primary); width: 0; }
+  .media-actions { display: flex; gap: 10px; margin-top: 4px; font-size: 13px; }
+  .media-actions a { color: var(--primary); text-decoration: none; font-weight: 600; }
+
+  #composer { display: flex; gap: 8px; align-items: flex-end; padding: 10px 12px; background: #F0EAE4; }
+  #composer textarea { flex: 1; resize: none; border: 1px solid var(--divider); border-radius: 22px; padding: 11px 16px; font: inherit; font-size: 15px;
+                       max-height: 160px; min-height: 44px; outline: none; background: #fff; }
+  #composer .round { width: 44px; height: 44px; border-radius: 50%; border: 0; flex: none; font-size: 20px; }
+  #attach { background: transparent; color: var(--text-sec); }
+  #attach:hover { background: rgba(0,0,0,.06); }
+  #send { background: var(--primary); color: #fff; }
+  #drop { position: absolute; inset: 0; background: rgba(200,85,61,.12); border: 3px dashed var(--primary); display: flex;
+          align-items: center; justify-content: center; font-size: 22px; color: var(--primary-dark); font-weight: 700; pointer-events: none; }
+  #main { position: relative; }
+
+  #viewer { position: fixed; inset: 0; background: rgba(0,0,0,.92); display: flex; flex-direction: column; z-index: 10; }
+  #viewer .bar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; color: #fff; }
+  #viewer .bar .grow { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #viewer .bar a, #viewer .bar button { color: #fff; background: rgba(255,255,255,.12); border: 0; border-radius: 18px; padding: 8px 16px; text-decoration: none; font-weight: 600; }
+  #viewer .stage { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; padding: 0 16px 16px;
+                   overflow: hidden; position: relative; touch-action: none; cursor: zoom-in; }
+  #viewer .stage.zoomed { cursor: grab; }
+  #viewer .stage.dragging { cursor: grabbing; }
+  #viewer .stage img, #viewer .stage video { max-width: 100%; max-height: 100%; object-fit: contain; transform-origin: center center;
+                   user-select: none; -webkit-user-drag: none; will-change: transform; }
+  #viewer .zoom { display: flex; align-items: center; gap: 4px; background: rgba(255,255,255,.12); border-radius: 18px; padding: 2px; }
+  #viewer .zoom button { background: transparent !important; padding: 6px 12px !important; font-size: 18px; line-height: 1; }
+  #viewer .zoom span { min-width: 52px; text-align: center; font-size: 14px; cursor: pointer; }
+  #viewer .vbar { display: flex; align-items: center; gap: 12px; padding: 8px 16px 14px; color: #fff; }
+  #viewer .vbar button { color: #fff; background: rgba(255,255,255,.12); border: 0; border-radius: 50%; width: 42px; height: 42px; font-size: 18px; }
+  #viewer .vbar input[type=range] { flex: 1; accent-color: var(--primary); }
+  #viewer .vbar .t { font-size: 13px; min-width: 96px; text-align: center; font-variant-numeric: tabular-nums; }
+  #viewer .tip { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,.7); font-size: 13px;
+                 background: rgba(0,0,0,.4); padding: 4px 12px; border-radius: 12px; pointer-events: none; }
+  .topbar .avatar { box-shadow: 0 0 0 2px rgba(255,255,255,.75); }
+
+  /* ---------- Configurações ---------- */
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 12; padding: 16px; }
+  .sheet { background: #fff; border-radius: 16px; width: 100%; max-width: 440px; max-height: 100%; overflow-y: auto; box-shadow: 0 10px 40px rgba(0,0,0,.25); }
+  .sheet .head { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--divider); font-weight: 700; font-size: 18px; }
+  .sheet .head .grow { flex: 1; }
+  .sheet .head button { background: transparent; border: 0; font-size: 20px; width: 36px; height: 36px; border-radius: 50%; }
+  .sheet .head button:hover { background: var(--hover); }
+  .sheet .body { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+  .sheet .big { width: 140px; height: 140px; font-size: 56px; margin: 0 auto; cursor: pointer; }
+  .sheet .row { display: flex; gap: 8px; justify-content: center; }
+  .sheet label { font-weight: 600; font-size: 14px; }
+  .sheet input[type=text] { width: 100%; padding: 10px 14px; border: 1px solid var(--divider); border-radius: 10px; font: inherit; font-size: 16px; outline: none; }
+  .sheet input[type=text]:focus { border-color: var(--primary); }
+  .sheet .info { display: grid; grid-template-columns: 140px 1fr; gap: 6px 10px; font-size: 14px; }
+  .sheet .info span:nth-child(odd) { color: var(--text-sec); }
+  .sheet .msgline { text-align: center; font-size: 14px; min-height: 18px; }
+  .btn:disabled { opacity: .45; cursor: default; }
+
+  /* ---------- Editor de foto ---------- */
+  #editor { position: fixed; inset: 0; background: #111; z-index: 15; display: flex; flex-direction: column; color: #fff; user-select: none; }
+  #editor .bar { display: flex; align-items: center; gap: 6px; padding: 8px 12px; flex-wrap: wrap; }
+  #editor .bar .grow { flex: 1; min-width: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: #ccc; }
+  #editor .tool { background: rgba(255,255,255,.1); color: #fff; border: 0; border-radius: 18px; padding: 8px 14px; font-weight: 600; font-size: 14px; }
+  #editor .tool:hover { background: rgba(255,255,255,.2); }
+  #editor .tool.on { background: var(--primary); }
+  #editor .tool:disabled { opacity: .35; cursor: default; }
+  #editor .sub { display: flex; align-items: center; gap: 8px; padding: 0 12px 8px; min-height: 44px; flex-wrap: wrap; justify-content: center; }
+  #editor .sub .hint { font-size: 13px; color: #bbb; }
+  #editor .swatch { width: 28px; height: 28px; border-radius: 50%; border: 2px solid rgba(255,255,255,.6); cursor: pointer; padding: 0; }
+  #editor .swatch.on { outline: 3px solid #fff; outline-offset: 2px; }
+  #edStage { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; min-height: 0; overflow: hidden; padding: 8px; }
+  #edCanvas { max-width: 100%; max-height: 100%; touch-action: none; background: repeating-conic-gradient(#333 0 25%, #444 0 50%) 0 0/20px 20px; }
+  #edCanvas.draw { cursor: crosshair; }
+  .ed-item { position: absolute; transform: translate(-50%, -50%); cursor: move; white-space: pre; font-weight: 700; line-height: 1.15;
+             padding: 2px 6px; border: 2px dashed rgba(255,255,255,.8); border-radius: 6px; touch-action: none;
+             text-shadow: 0 0 3px #000, 0 0 3px #000; }
+  .ed-item:focus { outline: none; }
+  #edCrop { position: absolute; border: 2px solid #fff; box-shadow: 0 0 0 9999px rgba(0,0,0,.55); touch-action: none; cursor: move; }
+  #edCrop .h { position: absolute; width: 22px; height: 22px; background: #fff; border-radius: 50%; border: 3px solid var(--primary); }
+  #edCrop .h.nw { left: -12px; top: -12px; cursor: nwse-resize; } #edCrop .h.ne { right: -12px; top: -12px; cursor: nesw-resize; }
+  #edCrop .h.sw { left: -12px; bottom: -12px; cursor: nesw-resize; } #edCrop .h.se { right: -12px; bottom: -12px; cursor: nwse-resize; }
+  #edCrop .grid { position: absolute; inset: 0; background:
+      linear-gradient(to right, transparent 33%, rgba(255,255,255,.35) 33%, rgba(255,255,255,.35) calc(33% + 1px), transparent calc(33% + 1px), transparent 66%, rgba(255,255,255,.35) 66%, rgba(255,255,255,.35) calc(66% + 1px), transparent calc(66% + 1px)),
+      linear-gradient(to bottom, transparent 33%, rgba(255,255,255,.35) 33%, rgba(255,255,255,.35) calc(33% + 1px), transparent calc(33% + 1px), transparent 66%, rgba(255,255,255,.35) 66%, rgba(255,255,255,.35) calc(66% + 1px), transparent calc(66% + 1px)); pointer-events: none; }
+  #edEmojis { display: flex; flex-wrap: wrap; gap: 2px; max-width: 760px; justify-content: center; }
+  #edEmojis button { background: transparent; border: 0; font-size: 26px; width: 42px; height: 42px; border-radius: 8px; }
+  #edEmojis button:hover { background: rgba(255,255,255,.15); }
+  #editor .foot { display: flex; gap: 10px; align-items: center; padding: 10px 12px 14px; }
+  #edCaption { flex: 1; padding: 12px 16px; border-radius: 22px; border: 0; font: inherit; font-size: 15px; outline: none; }
+  #edSend { width: 50px; height: 50px; border-radius: 50%; border: 0; background: var(--primary); color: #fff; font-size: 22px; flex: none; }
+
+  #toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: #333; color: #fff; padding: 10px 18px; border-radius: 20px;
+           font-size: 14px; z-index: 20; max-width: calc(100% - 32px); }
+
+  /* Celular / tela estreita: uma coluna de cada vez. */
+  @media (max-width: 760px) {
+    #app { grid-template-columns: 1fr; }
+    #app.in-chat #side { display: none; }
+    #app:not(.in-chat) #main { display: none; }
+    #messages { padding: 12px 10px; }
+  }
+  #back { display: none; }
+  @media (max-width: 760px) { #back { display: inline-block; } }
+</style>
+</head>
+<body>
+
+<!-- Ligar o navegador: QR Code -->
+<div id="login" class="hidden">
+  <div class="card">
+    <div>
+      <div class="brand">FALAÍ</div>
+      <h1>Use o Falaí no computador</h1>
+      <ol>
+        <li>Abra o <b>Falaí</b> no seu celular.</li>
+        <li>Toque na <b>engrenagem ⚙</b> e depois em <b>Falaí no computador</b>.</li>
+        <li>Aponte a câmera do celular para este código.</li>
+      </ol>
+      <p class="hint">As conversas aparecem aqui na hora. Para sair, use o botão <b>Sair</b> no topo da lista.<br>
+      Use só em computadores da família.</p>
+    </div>
+    <div>
+      <div id="qr"></div>
+      <div id="code"></div>
+    </div>
+  </div>
+</div>
+
+<!-- O Falaí -->
+<div id="app" class="hidden">
+  <aside id="side">
+    <div class="topbar">
+      <div class="avatar small" id="meAvatar"></div>
+      <div class="grow">
+        <div class="title">Falaí</div>
+        <div class="status"><span class="dot" id="dot"></span><span id="statusText">conectando…</span></div>
+      </div>
+      <button class="icon" id="bell" title="Avisar quando chegar mensagem">🔔</button>
+      <button class="icon" id="settingsBtn" title="Configurações (foto e nome)">⚙</button>
+      <button class="textbtn" id="logout" title="Desligar o Falaí deste computador">Sair</button>
+    </div>
+    <input id="search" placeholder="Procurar conversa" autocomplete="off">
+    <div id="convs"></div>
+  </aside>
+  <main id="main">
+    <div id="welcome">
+      <div class="big">💬</div>
+      <div><b>Escolha uma conversa</b> na lista ao lado.</div>
+      <div style="font-size:14px">Para começar uma conversa nova, use o Falaí no celular.</div>
+    </div>
+    <div id="chat" class="hidden">
+      <div class="topbar">
+        <button class="icon" id="back" title="Voltar">←</button>
+        <div class="avatar small" id="chatAvatar"></div>
+        <div class="grow">
+          <div style="font-weight:600;font-size:17px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" id="chatName"></div>
+          <div class="status" id="chatSub"></div>
+        </div>
+      </div>
+      <div id="messages"></div>
+      <div id="composer">
+        <button class="round" id="attach" title="Mandar foto, vídeo ou arquivo">📎</button>
+        <input type="file" id="fileInput" multiple class="hidden">
+        <textarea id="text" rows="1" placeholder="Mensagem"></textarea>
+        <button class="round" id="send" title="Enviar">➤</button>
+      </div>
+    </div>
+    <div id="drop" class="hidden">Solte aqui para enviar</div>
+  </main>
+</div>
+
+<div id="viewer" class="hidden">
+  <div class="bar">
+    <span class="grow" id="viewerName"></span>
+    <div class="zoom">
+      <button id="zoomOut" title="Diminuir (−)">−</button>
+      <span id="zoomLabel" title="Voltar ao tamanho normal">100%</span>
+      <button id="zoomIn" title="Aumentar (+)">+</button>
+    </div>
+    <a id="viewerSave" href="#">⬇ Salvar</a>
+    <button id="viewerClose">✕ Fechar</button>
+  </div>
+  <div class="stage" id="stage">
+    <img id="viewerImg" alt="" draggable="false">
+    <video id="viewerVideo" class="hidden" playsinline></video>
+    <div class="tip" id="zoomTip">Rodinha do mouse ou dois cliques para aumentar · arraste para mover</div>
+  </div>
+  <div class="vbar hidden" id="vbar">
+    <button id="vPlay" title="Tocar / pausar (espaço)">▶</button>
+    <span class="t" id="vTime">0:00 / 0:00</span>
+    <input type="range" id="vSeek" min="0" max="1000" value="0">
+    <button id="vMute" title="Som">🔊</button>
+  </div>
+</div>
+<!-- Configurações do perfil -->
+<div id="settings" class="modal hidden">
+  <div class="sheet">
+    <div class="head"><span class="grow">Configurações</span><button id="setClose" title="Fechar">✕</button></div>
+    <div class="body">
+      <div class="avatar big" id="setAvatar" title="Trocar a foto"></div>
+      <input type="file" id="setPhotoInput" accept="image/*" class="hidden">
+      <div class="row">
+        <button class="btn ghost" id="setPhoto">Trocar foto</button>
+        <button class="btn ghost" id="setNoPhoto">Tirar foto</button>
+      </div>
+      <label for="setName">Seu nome</label>
+      <input type="text" id="setName" maxlength="60" autocomplete="off">
+      <button class="btn" id="setSave" disabled>Salvar nome</button>
+      <div class="msgline" id="setMsg"></div>
+      <hr style="border:0;border-top:1px solid var(--divider);margin:4px 0">
+      <div class="info">
+        <span>Conexão</span><span id="setConn"></span>
+        <span>Servidor</span><span id="setHost"></span>
+        <span>Este computador</span><span>ligado ao seu Falaí</span>
+      </div>
+      <button class="btn ghost" id="setLogout">Sair deste computador</button>
+    </div>
+  </div>
+</div>
+
+<!-- Editor de foto, antes de enviar -->
+<div id="editor" class="hidden">
+  <div class="bar">
+    <button class="tool" id="edCancel" title="Não enviar esta foto">✕ Cancelar</button>
+    <span class="grow" id="edTitle"></span>
+    <button class="tool" data-tool="crop" title="Recortar">✂ Recortar</button>
+    <button class="tool" id="edRotate" title="Girar 90°">⟳ Girar</button>
+    <button class="tool" data-tool="draw" title="Desenhar">✏️ Desenhar</button>
+    <button class="tool" data-tool="text" title="Escrever na foto">T Texto</button>
+    <button class="tool" data-tool="emoji" title="Colocar emoji">😀 Emoji</button>
+    <button class="tool" id="edUndo" title="Desfazer (Ctrl+Z)" disabled>↶ Desfazer</button>
+  </div>
+  <div class="sub" id="edSub"></div>
+  <div id="edStage"><canvas id="edCanvas"></canvas></div>
+  <div class="foot">
+    <input id="edCaption" placeholder="Escreva uma legenda (opcional)" autocomplete="off">
+    <button id="edSend" title="Enviar (Enter)">➤</button>
+  </div>
+</div>
+
+<div id="toast" class="hidden"></div>
+
+<script>
+"use strict";
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var CHUNK = 8 * 1024 * 1024;
+  var MAX_WEB_UPLOAD = 1024 * 1024 * 1024; // o navegador lê o arquivo inteiro para conferir: até 1 GB
+  var PALETTE = ["#C8553D", "#3D7EC8", "#2E9E5B", "#8E5BC8", "#D08A00", "#3DA6A6"];
+
+  var state = {
+    me: null, users: {}, convs: {}, messages: {}, lastSeq: 0, current: null,
+    ws: null, online: false, retry: 0, unread: {}, uploads: {}, pendingSends: {}
+  };
+
+  // ---------- utilidades ----------
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function linkify(text) {
+    return esc(text).replace(/(https?:\/\/[^\s<]+)/g, function (u) {
+      return '<a href="' + u + '" target="_blank" rel="noopener noreferrer">' + u + "</a>";
+    });
+  }
+  function uuid() {
+    if (crypto.randomUUID) return crypto.randomUUID();
+    var b = crypto.getRandomValues(new Uint8Array(16));
+    b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128;
+    var h = Array.prototype.map.call(b, function (x) { return (x + 256).toString(16).slice(1); }).join("");
+    return h.slice(0, 8) + "-" + h.slice(8, 12) + "-" + h.slice(12, 16) + "-" + h.slice(16, 20) + "-" + h.slice(20);
+  }
+  function hashCode(s) { var h = 0; for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h & 0x7fffffff; }
+  function pad(n) { return n < 10 ? "0" + n : "" + n; }
+  function timeOf(ms) { var d = new Date(ms); return pad(d.getHours()) + ":" + pad(d.getMinutes()); }
+  function dayOf(ms) {
+    var d = new Date(ms), now = new Date();
+    var y = new Date(now); y.setDate(now.getDate() - 1);
+    if (d.toDateString() === now.toDateString()) return "Hoje";
+    if (d.toDateString() === y.toDateString()) return "Ontem";
+    return pad(d.getDate()) + "/" + pad(d.getMonth() + 1) + "/" + d.getFullYear();
+  }
+  function shortTime(ms) {
+    var d = new Date(ms);
+    return d.toDateString() === new Date().toDateString() ? timeOf(ms) : pad(d.getDate()) + "/" + pad(d.getMonth() + 1);
+  }
+  function sizeLabel(b) {
+    if (b < 1024) return b + " B";
+    if (b < 1024 * 1024) return Math.round(b / 1024) + " KB";
+    if (b < 1024 * 1024 * 1024) return (b / 1024 / 1024).toFixed(1).replace(".", ",") + " MB";
+    return (b / 1024 / 1024 / 1024).toFixed(1).replace(".", ",") + " GB";
+  }
+  function durLabel(ms) { var s = Math.round(ms / 1000); return Math.floor(s / 60) + ":" + pad(s % 60); }
+  function extOf(name, mime) {
+    var e = (name.split(".").pop() || "").toUpperCase();
+    if (e && e !== name.toUpperCase() && e.length <= 5) return e;
+    var sub = (mime.split("/")[1] || "ARQ").toUpperCase();
+    return sub.length <= 5 ? sub : "ARQ";
+  }
+  function toast(text) {
+    var t = $("toast"); t.textContent = text; t.classList.remove("hidden");
+    clearTimeout(toast.timer); toast.timer = setTimeout(function () { t.classList.add("hidden"); }, 3500);
+  }
+  function mediaUrl(id, download) { return "/api/media/" + encodeURIComponent(id) + (download ? "?download=1" : ""); }
+  function kindOf(mime) {
+    if (mime.indexOf("image/") === 0) return "image";
+    if (mime.indexOf("video/") === 0) return "video";
+    if (mime.indexOf("audio/") === 0) return "audio";
+    return "file";
+  }
+  async function api(method, url, body) {
+    var r = await fetch(url, {
+      method: method, credentials: "same-origin",
+      headers: body && !(body instanceof Blob) ? { "Content-Type": "application/json" } : {},
+      body: body instanceof Blob ? body : body ? JSON.stringify(body) : undefined
+    });
+    var text = await r.text();
+    var data = null;
+    try { data = text ? JSON.parse(text) : null; } catch (e) { /* não é JSON */ }
+    if (!r.ok) {
+      var err = new Error((data && data.message) || ("Erro " + r.status));
+      err.status = r.status; err.code = data && data.error;
+      throw err;
+    }
+    return data;
+  }
+
+  function avatarHtml(name, mediaId, cls) {
+    var color = PALETTE[hashCode(name || "?") % PALETTE.length];
+    var initial = esc(((name || "?").trim()[0] || "?").toUpperCase());
+    // A inicial fica por baixo: se a foto não abrir, ela aparece.
+    var photo = mediaId ? '<img src="' + mediaUrl(mediaId) + '" alt="" style="position:absolute;inset:0">' : "";
+    return '<div class="avatar ' + (cls || "") + '" style="position:relative;background:' + color + '">' + initial + photo + "</div>";
+  }
+  function setAvatar(el, name, mediaId) {
+    el.style.background = PALETTE[hashCode(name || "?") % PALETTE.length];
+    el.innerHTML = mediaId ? '<img src="' + mediaUrl(mediaId) + '" alt="">' : esc(((name || "?").trim()[0] || "?").toUpperCase());
+    var img = el.querySelector("img");
+    if (img) img.onerror = function () { el.textContent = ((name || "?").trim()[0] || "?").toUpperCase(); };
+  }
+  function userName(id) { var u = state.users[id]; return u ? u.name : "Alguém"; }
+
+  // ---------- 1. Ligar pelo QR Code ----------
+  var linkTimer = null;
+  async function showLogin() {
+    $("app").classList.add("hidden");
+    $("login").classList.remove("hidden");
+    clearTimeout(linkTimer);
+    var qr = $("qr");
+    qr.innerHTML = '<div class="over">Gerando o código…</div>';
+    $("code").textContent = "";
+    var link;
+    try {
+      link = await api("POST", "/api/web/link");
+    } catch (e) {
+      qr.innerHTML = '<div class="over">' + esc(e.message) + '<button class="btn" id="again">Tentar de novo</button></div>';
+      $("again").onclick = showLogin;
+      return;
+    }
+    qr.innerHTML = link.qrSvg;
+    $("code").innerHTML = "Se a câmera não ler, digite no celular:<br><b>" + esc(link.code.slice(0, 4) + " " + link.code.slice(4)) + "</b>";
+    var until = Date.now() + link.validMs - 5000;
+    (async function poll() {
+      if (Date.now() > until) {
+        qr.innerHTML += '<div class="over"><b>O código venceu.</b><button class="btn" id="again">Mostrar outro</button></div>';
+        $("again").onclick = showLogin;
+        return;
+      }
+      try {
+        var st = await api("GET", "/api/web/link/" + encodeURIComponent(link.id) + "?s=" + encodeURIComponent(link.secret));
+        if (st.status === "approved") { start(); return; }
+        if (st.status === "expired") { showLogin(); return; }
+      } catch (e) { /* sem rede por um instante: tenta de novo */ }
+      linkTimer = setTimeout(poll, 2000);
+    })();
+  }
+
+  // ---------- 2. Conectar ----------
+  async function start() {
+    var me;
+    try {
+      me = await api("GET", "/api/web/me");
+    } catch (e) {
+      if (e.status === 401) { showLogin(); return; }
+      $("login").classList.remove("hidden");
+      $("qr").innerHTML = '<div class="over">Sem conexão com o servidor.<button class="btn" id="again">Tentar de novo</button></div>';
+      $("again").onclick = start;
+      return;
+    }
+    clearTimeout(linkTimer);
+    state.me = { id: me.userId, name: me.name };
+    $("login").classList.add("hidden");
+    $("app").classList.remove("hidden");
+    renderConvs();
+    connect();
+  }
+
+  function setStatus(online, text) {
+    state.online = online;
+    $("dot").classList.toggle("on", online);
+    $("statusText").textContent = text;
+    renderChatHeader();
+  }
+
+  function send(frame) {
+    if (state.ws && state.ws.readyState === 1) { state.ws.send(JSON.stringify(frame)); return true; }
+    return false;
+  }
+
+  function connect() {
+    setStatus(false, "conectando…");
+    var ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
+    state.ws = ws;
+    ws.onmessage = function (ev) {
+      var f;
+      try { f = JSON.parse(ev.data); } catch (e) { return; }
+      handle(f);
+    };
+    ws.onclose = function (ev) {
+      if (state.ws !== ws) return;
+      state.ws = null;
+      if (ev.code === 4001) { toast("Este computador foi desligado do Falaí."); showLogin(); return; }
+      var delays = [1000, 2000, 5000, 10000, 20000];
+      var d = delays[Math.min(state.retry, delays.length - 1)];
+      state.retry++;
+      setStatus(false, "sem conexão, tentando de novo…");
+      setTimeout(connect, d);
+    };
+  }
+
+  // Pedidos que esperam resposta (ex.: trocar o nome): resolve quando a resposta chega.
+  var waiting = {};
+  function request(frame) {
+    return new Promise(function (resolve, reject) {
+      frame.requestId = uuid();
+      if (!send(frame)) { reject(new Error("Sem conexão com o servidor. Tente de novo em instantes.")); return; }
+      var timer = setTimeout(function () { delete waiting[frame.requestId]; reject(new Error("O servidor não respondeu. Tente de novo.")); }, 20000);
+      waiting[frame.requestId] = { resolve: function (f) { clearTimeout(timer); resolve(f); }, reject: function (e) { clearTimeout(timer); reject(e); } };
+    });
+  }
+
+  function handle(f) {
+    if (f.requestId && waiting[f.requestId]) {
+      var w = waiting[f.requestId];
+      delete waiting[f.requestId];
+      if (f.type === "error") w.reject(new Error(f.message)); else w.resolve(f);
+    }
+    switch (f.type) {
+      case "hello":
+        state.retry = 0;
+        state.me = f.user;
+        state.users[f.user.id] = f.user;
+        f.conversations.forEach(function (c) { state.convs[c.id] = c; });
+        setAvatar($("meAvatar"), f.user.name, f.user.avatarMediaId);
+        setStatus(true, "online");
+        send({ type: "list_users", requestId: "web-users" });
+        send({ type: "sync", afterSeq: state.lastSeq });
+        // O que ficou esperando a conexão sai agora.
+        Object.keys(state.pendingSends).forEach(function (id) { send(state.pendingSends[id]); });
+        renderConvs();
+        break;
+      case "users":
+        f.users.forEach(function (u) { state.users[u.id] = u; });
+        renderConvs(); renderChat();
+        break;
+      case "user_updated":
+        state.users[f.user.id] = f.user;
+        if (state.me && f.user.id === state.me.id) {
+          state.me = f.user;
+          setAvatar($("meAvatar"), f.user.name, f.user.avatarMediaId);
+          renderSettings();
+        }
+        renderConvs(); renderChat();
+        break;
+      case "sync_batch":
+        f.messages.forEach(function (m) { addMessage(m, true); });
+        renderConvs(); renderChat();
+        break;
+      case "sync_done":
+        state.lastSeq = Math.max(state.lastSeq, f.lastSeq);
+        break;
+      case "message":
+        addMessage(f.message, false);
+        renderConvs();
+        if (f.message.conversationId === state.current) renderChat(true);
+        break;
+      case "ack":
+        var p = findLocal(f.id);
+        if (p) { p.seq = f.seq; p.createdAt = f.createdAt; p.status = "sent"; }
+        delete state.pendingSends[f.id];
+        state.lastSeq = Math.max(state.lastSeq, f.seq);
+        renderConvs(); renderChat();
+        break;
+      case "conversation":
+        state.convs[f.conversation.id] = f.conversation;
+        renderConvs();
+        break;
+      case "error":
+        if (f.requestId) {
+          var m = findLocal(f.requestId);
+          if (m) { m.status = "failed"; delete state.pendingSends[f.requestId]; toast(f.message); renderChat(); }
+        }
+        break;
+    }
+  }
+
+  function findLocal(id) {
+    for (var c in state.messages) {
+      var list = state.messages[c];
+      for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+    }
+    return null;
+  }
+
+  function addMessage(m, fromSync) {
+    var list = state.messages[m.conversationId] || (state.messages[m.conversationId] = []);
+    var existing = null;
+    for (var i = 0; i < list.length; i++) if (list[i].id === m.id) { existing = list[i]; break; }
+    if (existing) { Object.assign(existing, m, { status: "sent" }); }
+    else {
+      m.status = "sent";
+      list.push(m);
+      var mine = state.me && m.authorId === state.me.id;
+      if (!mine && (m.conversationId !== state.current || document.hidden)) {
+        state.unread[m.conversationId] = (state.unread[m.conversationId] || 0) + (fromSync ? 0 : 1);
+        if (!fromSync) notify(m);
+      }
+    }
+    list.sort(function (a, b) {
+      if (a.seq == null && b.seq == null) return a.createdAt - b.createdAt;
+      if (a.seq == null) return 1;
+      if (b.seq == null) return -1;
+      return a.seq - b.seq;
+    });
+    if (m.seq) state.lastSeq = Math.max(state.lastSeq, m.seq);
+  }
+
+  // ---------- avisos ----------
+  function updateTitle() {
+    var n = 0; for (var k in state.unread) n += state.unread[k];
+    document.title = n > 0 ? "(" + n + ") Falaí" : "Falaí";
+  }
+  function notify(m) {
+    updateTitle();
+    if (!("Notification" in window) || Notification.permission !== "granted" || !document.hidden) return;
+    var body = m.body || (m.attachment ? ({ image: "📷 Foto", video: "🎥 Vídeo", audio: "🎤 Áudio" }[m.attachment.kind] || "📎 " + m.attachment.name) : "");
+    try {
+      var n = new Notification(convName(state.convs[m.conversationId]) || "Falaí", { body: (isGroup(m.conversationId) ? userName(m.authorId) + ": " : "") + body, tag: m.conversationId });
+      n.onclick = function () { window.focus(); openConv(m.conversationId); n.close(); };
+    } catch (e) { /* alguns navegadores não deixam */ }
+  }
+  $("bell").onclick = function () {
+    if (!("Notification" in window)) { toast("Este navegador não mostra avisos."); return; }
+    Notification.requestPermission().then(function (p) {
+      toast(p === "granted" ? "Pronto! Vou avisar quando chegar mensagem." : "Avisos bloqueados no navegador.");
+    });
+  };
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden && state.current) { state.unread[state.current] = 0; renderConvs(); }
+  });
+
+  // ---------- lista de conversas ----------
+  function isGroup(cid) { var c = state.convs[cid]; return c && c.kind === "group"; }
+  function otherId(c) {
+    if (!c || c.kind !== "direct") return null;
+    for (var i = 0; i < c.memberIds.length; i++) if (!state.me || c.memberIds[i] !== state.me.id) return c.memberIds[i];
+    return null;
+  }
+  function convName(c) {
+    if (!c) return "";
+    if (c.kind === "group") return c.title || "Grupo";
+    var o = otherId(c);
+    return o ? userName(o) : "Conversa";
+  }
+  function preview(m) {
+    if (!m) return "";
+    var p = "";
+    if (m.attachment) p = { image: "📷 Foto", video: "🎥 Vídeo", audio: "🎤 Áudio" }[m.attachment.kind] || "📎 " + m.attachment.name;
+    if (m.body) p = (p ? p + " " : "") + m.body;
+    return p;
+  }
+  function lastOf(cid) { var l = state.messages[cid]; return l && l.length ? l[l.length - 1] : null; }
+
+  function renderConvs() {
+    updateTitle();
+    var q = $("search").value.trim().toLowerCase();
+    var list = Object.keys(state.convs).map(function (id) { return state.convs[id]; });
+    list.sort(function (a, b) {
+      var la = lastOf(a.id), lb = lastOf(b.id);
+      return (lb ? lb.createdAt : b.createdAt) - (la ? la.createdAt : a.createdAt);
+    });
+    if (q) list = list.filter(function (c) { return convName(c).toLowerCase().indexOf(q) >= 0; });
+    if (!list.length) {
+      $("convs").innerHTML = '<div class="empty">' + (q ? "Nenhuma conversa com esse nome." : "Nenhuma conversa ainda.<br>Comece uma pelo Falaí no celular.") + "</div>";
+      return;
+    }
+    $("convs").innerHTML = list.map(function (c) {
+      var last = lastOf(c.id);
+      var mine = last && state.me && last.authorId === state.me.id;
+      var other = otherId(c);
+      var u = other ? state.users[other] : null;
+      var unread = state.unread[c.id] || 0;
+      var who = last && c.kind === "group" && !mine ? userName(last.authorId) + ": " : "";
+      return '<div class="conv' + (c.id === state.current ? " sel" : "") + '" data-id="' + esc(c.id) + '">' +
+        avatarHtml(convName(c), u && u.avatarMediaId) +
+        '<div class="mid"><div class="row1"><span class="name">' + esc(convName(c)) + '</span><span class="time">' +
+        (last ? shortTime(last.createdAt) : "") + '</span></div>' +
+        '<div class="row1"><span class="last" style="flex:1">' + (mine ? (last.status === "sent" ? "✓ " : last.status === "failed" ? "⚠️ " : "🕓 ") + "Você: " : esc(who)) +
+        esc(preview(last) || (c.kind === "group" ? "Grupo criado" : "Conversa nova")) + "</span>" +
+        (unread ? '<span class="badge">' + unread + "</span>" : "") + "</div></div></div>";
+    }).join("");
+    Array.prototype.forEach.call($("convs").querySelectorAll(".conv"), function (el) {
+      el.onclick = function () { openConv(el.getAttribute("data-id")); };
+    });
+    // Foto que não abriu: fica a inicial.
+    Array.prototype.forEach.call($("convs").querySelectorAll(".avatar img"), function (img) {
+      img.onerror = function () { img.remove(); };
+    });
+  }
+  $("search").oninput = renderConvs;
+
+  // ---------- conversa aberta ----------
+  function openConv(id) {
+    state.current = id;
+    state.unread[id] = 0;
+    $("welcome").classList.add("hidden");
+    $("chat").classList.remove("hidden");
+    $("app").classList.add("in-chat");
+    renderConvs();
+    renderChat(true);
+    $("text").focus();
+  }
+  $("back").onclick = function () {
+    state.current = null;
+    $("app").classList.remove("in-chat");
+    $("chat").classList.add("hidden");
+    $("welcome").classList.remove("hidden");
+    renderConvs();
+  };
+
+  function renderChatHeader() {
+    var c = state.convs[state.current];
+    if (!c) return;
+    var other = otherId(c);
+    var u = other ? state.users[other] : null;
+    $("chatName").textContent = convName(c);
+    setAvatar($("chatAvatar"), convName(c), u && u.avatarMediaId);
+    if (c.kind === "group") {
+      $("chatSub").textContent = c.memberIds.map(userName).join(", ");
+    } else {
+      $("chatSub").innerHTML = '<span class="dot' + (state.online ? " on" : "") + '"></span>' + (state.online ? "online" : "sem conexão");
+    }
+  }
+
+  function attachmentHtml(m) {
+    var a = m.attachment;
+    if (!a.mediaId) {
+      // Ainda subindo deste computador.
+      var up = state.uploads[m.id] || 0;
+      return '<div class="file"><div class="ext">' + esc(extOf(a.name, a.mime)) + '</div><div style="min-width:0;flex:1"><div class="fname">' +
+        esc(a.name) + '</div><div class="fsize">Enviando ' + Math.round(up * 100) + "% · " + sizeLabel(a.size) +
+        '</div><div class="progress"><div style="width:' + Math.round(up * 100) + '%"></div></div></div></div>';
+    }
+    var url = mediaUrl(a.mediaId);
+    if (a.kind === "image") {
+      return '<img class="media" loading="lazy" src="' + url + '" alt="Foto" data-view="' + esc(a.mediaId) + '" data-name="' + esc(a.name) + '">' +
+        '<div class="media-actions"><a href="' + mediaUrl(a.mediaId, true) + '">⬇ Salvar</a><span style="color:var(--text-sec)">' + esc(extOf(a.name, a.mime)) + " · " + sizeLabel(a.size) + "</span></div>";
+    }
+    if (a.kind === "video") {
+      var poster = a.thumb ? ' poster="data:image/jpeg;base64,' + esc(a.thumb) + '"' : "";
+      return '<video class="media" controls preload="none"' + poster + ' src="' + url + '"></video>' +
+        '<div class="media-actions"><a href="#" data-zoomvideo="' + esc(a.mediaId) + '" data-name="' + esc(a.name) + '">🔍 Ampliar</a>' +
+        '<a href="' + mediaUrl(a.mediaId, true) + '">⬇ Salvar</a><span style="color:var(--text-sec)">🎥 ' +
+        esc(extOf(a.name, a.mime)) + (a.durationMs ? " · " + durLabel(a.durationMs) : "") + " · " + sizeLabel(a.size) + "</span></div>";
+    }
+    if (a.kind === "audio") {
+      return '<audio controls preload="none" src="' + url + '"></audio>' +
+        '<div class="media-actions"><a href="' + mediaUrl(a.mediaId, true) + '">⬇ Salvar</a>' +
+        (a.durationMs ? '<span style="color:var(--text-sec)">🎤 ' + durLabel(a.durationMs) + "</span>" : "") + "</div>";
+    }
+    return '<a class="file" href="' + mediaUrl(a.mediaId, true) + '" title="Baixar"><div class="ext">' + esc(extOf(a.name, a.mime)) +
+      '</div><div style="min-width:0"><div class="fname">' + esc(a.name) + '</div><div class="fsize">' + esc(extOf(a.name, a.mime)) + " · " +
+      sizeLabel(a.size) + " · clique para baixar</div></div></a>";
+  }
+
+  function renderChat(scrollToEnd) {
+    if (!state.current) return;
+    renderChatHeader();
+    var box = $("messages");
+    var nearEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
+    var list = state.messages[state.current] || [];
+    var group = isGroup(state.current);
+    var html = [], lastDay = null;
+    list.forEach(function (m) {
+      var day = dayOf(m.createdAt);
+      if (day !== lastDay) { html.push('<div class="day">' + day + "</div>"); lastDay = day; }
+      var mine = state.me && m.authorId === state.me.id;
+      var tick = mine ? (m.status === "sent" ? " ✓" : m.status === "failed" ? " ⚠️ não enviada" : " 🕓") : "";
+      html.push('<div class="msg' + (mine ? " mine" : "") + (m.status === "failed" ? " failed" : "") + '">' +
+        (group && !mine ? '<div class="author">' + esc(userName(m.authorId)) + "</div>" : "") +
+        (m.attachment ? attachmentHtml(m) : "") +
+        (m.body ? '<div class="body">' + linkify(m.body) + "</div>" : "") +
+        '<div class="meta">' + timeOf(m.createdAt) + tick + "</div></div>");
+    });
+    if (!list.length) html.push('<div class="empty">Nenhuma mensagem ainda. Diga um oi! 👋</div>');
+    box.innerHTML = html.join("");
+    Array.prototype.forEach.call(box.querySelectorAll("img[data-view]"), function (img) {
+      img.onclick = function () { openViewer(img.getAttribute("data-view"), img.getAttribute("data-name"), false); };
+      img.onload = function () { if (nearEnd || scrollToEnd) box.scrollTop = box.scrollHeight; };
+    });
+    Array.prototype.forEach.call(box.querySelectorAll("a[data-zoomvideo]"), function (a) {
+      a.onclick = function (e) {
+        e.preventDefault();
+        // Pausa o vídeo da conversa e continua do mesmo ponto na tela cheia.
+        var inline = a.closest(".msg").querySelector("video.media");
+        var at = inline ? inline.currentTime : 0;
+        if (inline) inline.pause();
+        openViewer(a.getAttribute("data-zoomvideo"), a.getAttribute("data-name"), true, at);
+      };
+    });
+    if (nearEnd || scrollToEnd) box.scrollTop = box.scrollHeight;
+  }
+
+  // ---------- foto em tela cheia ----------
+  // Zoom: rodinha do mouse (no ponto do mouse), dois cliques, botões + e −, arrastar para mover,
+  // e dois dedos em tela de toque. Vale para foto e vídeo.
+  var zoom = { s: 1, x: 0, y: 0, el: null };
+  var MAX_ZOOM = 8;
+  function zoomTarget() { return zoom.el; }
+  function clampPan() {
+    var el = zoomTarget(), st = $("stage");
+    if (!el) return;
+    var w = el.offsetWidth * zoom.s, h = el.offsetHeight * zoom.s;
+    var mx = Math.max(0, (w - st.clientWidth) / 2), my = Math.max(0, (h - st.clientHeight) / 2);
+    zoom.x = Math.max(-mx, Math.min(mx, zoom.x));
+    zoom.y = Math.max(-my, Math.min(my, zoom.y));
+  }
+  function applyZoom() {
+    if (zoom.s <= 1.001) { zoom.s = 1; zoom.x = 0; zoom.y = 0; }
+    clampPan();
+    var el = zoomTarget();
+    if (el) el.style.transform = "translate(" + zoom.x + "px," + zoom.y + "px) scale(" + zoom.s + ")";
+    $("zoomLabel").textContent = Math.round(zoom.s * 100) + "%";
+    $("stage").classList.toggle("zoomed", zoom.s > 1);
+  }
+  // Muda o zoom mantendo parado o ponto (cx, cy) da tela (coordenadas da página).
+  function zoomAt(newScale, cx, cy) {
+    var st = $("stage").getBoundingClientRect();
+    var px = cx - (st.left + st.width / 2), py = cy - (st.top + st.height / 2);
+    var s2 = Math.max(1, Math.min(MAX_ZOOM, newScale));
+    var k = s2 / zoom.s;
+    zoom.x = px - (px - zoom.x) * k;
+    zoom.y = py - (py - zoom.y) * k;
+    zoom.s = s2;
+    applyZoom();
+    $("zoomTip").classList.add("hidden");
+  }
+  function zoomCenter(factor) {
+    var st = $("stage").getBoundingClientRect();
+    zoomAt(zoom.s * factor, st.left + st.width / 2, st.top + st.height / 2);
+  }
+  function resetZoom() { zoom.s = 1; zoom.x = 0; zoom.y = 0; applyZoom(); }
+
+  $("zoomIn").onclick = function () { zoomCenter(1.5); };
+  $("zoomOut").onclick = function () { zoomCenter(1 / 1.5); };
+  $("zoomLabel").onclick = resetZoom;
+  $("stage").addEventListener("wheel", function (e) {
+    if ($("viewer").classList.contains("hidden")) return;
+    e.preventDefault();
+    zoomAt(zoom.s * Math.pow(1.0015, -e.deltaY), e.clientX, e.clientY);
+  }, { passive: false });
+  $("stage").addEventListener("dblclick", function (e) {
+    if (e.target === $("stage")) return;
+    if (zoom.s > 1) resetZoom(); else zoomAt(2.5, e.clientX, e.clientY);
+  });
+
+  // Arrastar (mouse ou um dedo) e pinça (dois dedos).
+  var pointers = {}, pinch = null, drag = null, moved = false;
+  $("stage").addEventListener("pointerdown", function (e) {
+    if (e.target === $("stage") && zoom.s === 1) return; // clique no fundo: fecha (abaixo)
+    pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+    var ids = Object.keys(pointers);
+    moved = false;
+    if (ids.length === 2) {
+      var a = pointers[ids[0]], b = pointers[ids[1]];
+      pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), s: zoom.s };
+      drag = null;
+    } else if (ids.length === 1) {
+      drag = { x: e.clientX, y: e.clientY, ox: zoom.x, oy: zoom.y };
+    }
+  });
+  window.addEventListener("pointermove", function (e) {
+    if (!pointers[e.pointerId]) return;
+    pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+    var ids = Object.keys(pointers);
+    if (pinch && ids.length === 2) {
+      var a = pointers[ids[0]], b = pointers[ids[1]];
+      zoomAt(pinch.s * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d, (a.x + b.x) / 2, (a.y + b.y) / 2);
+      moved = true;
+    } else if (drag && zoom.s > 1) {
+      if (Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) > 3) moved = true;
+      zoom.x = drag.ox + e.clientX - drag.x;
+      zoom.y = drag.oy + e.clientY - drag.y;
+      $("stage").classList.add("dragging");
+      applyZoom();
+    }
+  });
+  function endPointer(e) {
+    delete pointers[e.pointerId];
+    if (Object.keys(pointers).length < 2) pinch = null;
+    if (!Object.keys(pointers).length) { drag = null; $("stage").classList.remove("dragging"); }
+  }
+  window.addEventListener("pointerup", endPointer);
+  window.addEventListener("pointercancel", endPointer);
+
+  // ---------- vídeo em tela cheia (com controles próprios, para o zoom não aumentar os botões) ----------
+  var video = $("viewerVideo");
+  function fmt(t) { return isFinite(t) ? durLabel(t * 1000) : "0:00"; }
+  function syncVideoBar() {
+    $("vPlay").textContent = video.paused ? "▶" : "⏸";
+    $("vTime").textContent = fmt(video.currentTime) + " / " + fmt(video.duration);
+    if (!seeking && isFinite(video.duration) && video.duration > 0) $("vSeek").value = Math.round(video.currentTime / video.duration * 1000);
+    $("vMute").textContent = video.muted ? "🔇" : "🔊";
+  }
+  var seeking = false;
+  ["timeupdate", "play", "pause", "loadedmetadata", "volumechange", "ended"].forEach(function (ev) { video.addEventListener(ev, syncVideoBar); });
+  $("vPlay").onclick = function () { if (video.paused) video.play(); else video.pause(); };
+  $("vMute").onclick = function () { video.muted = !video.muted; };
+  $("vSeek").addEventListener("input", function () {
+    seeking = true;
+    if (isFinite(video.duration)) video.currentTime = $("vSeek").value / 1000 * video.duration;
+  });
+  $("vSeek").addEventListener("change", function () { seeking = false; });
+  // Um clique no vídeo (sem arrastar) toca ou pausa.
+  video.addEventListener("click", function () { if (!moved) $("vPlay").onclick(); });
+
+  function openViewer(mediaId, name, isVideo, startAt) {
+    var img = $("viewerImg");
+    img.classList.toggle("hidden", !!isVideo);
+    video.classList.toggle("hidden", !isVideo);
+    $("vbar").classList.toggle("hidden", !isVideo);
+    if (isVideo) {
+      img.removeAttribute("src");
+      video.src = mediaUrl(mediaId);
+      if (startAt) video.addEventListener("loadedmetadata", function f() { video.currentTime = startAt; video.removeEventListener("loadedmetadata", f); });
+      video.play().catch(function () { /* o navegador pode pedir um clique antes */ });
+      zoom.el = video;
+    } else {
+      img.src = mediaUrl(mediaId);
+      zoom.el = img;
+    }
+    $("viewerName").textContent = name || (isVideo ? "Vídeo" : "Foto");
+    $("viewerSave").href = mediaUrl(mediaId, true);
+    $("zoomTip").classList.remove("hidden");
+    resetZoom();
+    $("viewer").classList.remove("hidden");
+  }
+  function closeViewer() {
+    $("viewer").classList.add("hidden");
+    $("viewerImg").removeAttribute("src");
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    zoom.el = null;
+  }
+  $("viewerClose").onclick = closeViewer;
+  $("stage").addEventListener("click", function (e) { if (e.target === $("stage") && zoom.s === 1) closeViewer(); });
+  document.addEventListener("keydown", function (e) {
+    if ($("viewer").classList.contains("hidden")) return;
+    if (e.key === "Escape") closeViewer();
+    else if (e.key === "+" || e.key === "=") zoomCenter(1.5);
+    else if (e.key === "-") zoomCenter(1 / 1.5);
+    else if (e.key === "0") resetZoom();
+    else if (e.key === " " && !video.classList.contains("hidden")) { e.preventDefault(); $("vPlay").onclick(); }
+  });
+  window.addEventListener("resize", function () { if (zoom.el) applyZoom(); });
+
+  // ---------- escrever ----------
+  function sendText() {
+    var t = $("text").value.trim();
+    if (!t || !state.current) return;
+    var id = uuid();
+    var frame = { type: "send", id: id, conversationId: state.current, body: t };
+    var m = { id: id, conversationId: state.current, authorId: state.me.id, body: t, createdAt: Date.now(), seq: null, status: "pending" };
+    (state.messages[state.current] = state.messages[state.current] || []).push(m);
+    state.pendingSends[id] = frame;
+    send(frame);
+    $("text").value = "";
+    autoGrow();
+    renderConvs(); renderChat(true);
+  }
+  $("send").onclick = sendText;
+  $("text").addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendText(); }
+  });
+  function autoGrow() { var t = $("text"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 160) + "px"; }
+  $("text").addEventListener("input", autoGrow);
+
+  // ---------- mandar arquivos ----------
+  $("attach").onclick = function () { $("fileInput").click(); };
+  $("fileInput").onchange = function () {
+    handleFiles($("fileInput").files);
+    $("fileInput").value = "";
+  };
+  // Arrastar e soltar, e colar imagem (Ctrl+V).
+  var dragDepth = 0;
+  $("main").addEventListener("dragenter", function (e) { if (!state.current) return; e.preventDefault(); dragDepth++; $("drop").classList.remove("hidden"); });
+  $("main").addEventListener("dragover", function (e) { if (state.current) e.preventDefault(); });
+  $("main").addEventListener("dragleave", function () { if (--dragDepth <= 0) { dragDepth = 0; $("drop").classList.add("hidden"); } });
+  $("main").addEventListener("drop", function (e) {
+    e.preventDefault(); dragDepth = 0; $("drop").classList.add("hidden");
+    if (state.current && e.dataTransfer) handleFiles(e.dataTransfer.files);
+  });
+  // Colar funciona em qualquer lugar da conversa aberta (não só na caixa de texto).
+  document.addEventListener("paste", function (e) {
+    if (!state.current || !$("editor").classList.contains("hidden") || !$("settings").classList.contains("hidden")) return;
+    var files = e.clipboardData && e.clipboardData.files;
+    if (files && files.length) { e.preventDefault(); handleFiles(files); }
+  });
+
+  function toHex(buf) {
+    return Array.prototype.map.call(new Uint8Array(buf), function (x) { return (x + 256).toString(16).slice(1); }).join("");
+  }
+
+  // Miniatura pequena (como no app), para quem recebe ver a prévia na hora.
+  function imageThumb(file) {
+    return new Promise(function (resolve) {
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () {
+        var scale = Math.min(1, 320 / Math.max(img.width, img.height));
+        var c = document.createElement("canvas");
+        c.width = Math.max(1, Math.round(img.width * scale));
+        c.height = Math.max(1, Math.round(img.height * scale));
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        var q = 0.7, data;
+        do { data = c.toDataURL("image/jpeg", q).split(",")[1]; q -= 0.15; } while (data.length > 24000 && q > 0.2);
+        resolve(data.length <= 24000 ? data : null);
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); resolve(null); };
+      img.src = url;
+    });
+  }
+  function mediaDuration(file, kind) {
+    return new Promise(function (resolve) {
+      if (kind !== "video" && kind !== "audio") { resolve(null); return; }
+      var el = document.createElement(kind);
+      var url = URL.createObjectURL(file);
+      el.preload = "metadata";
+      el.onloadedmetadata = function () { URL.revokeObjectURL(url); resolve(isFinite(el.duration) ? Math.round(el.duration * 1000) : null); };
+      el.onerror = function () { URL.revokeObjectURL(url); resolve(null); };
+      el.src = url;
+    });
+  }
+
+  /** Sobe o arquivo em pedaços (retoma se a internet falhar). Devolve { mediaId, sha256 }. */
+  async function uploadMedia(file, mime, name, onProgress) {
+    var buf = await file.arrayBuffer();
+    var sha256 = toHex(await crypto.subtle.digest("SHA-256", buf));
+    buf = null;
+    var st = await api("POST", "/api/media", { size: file.size, sha256: sha256, mime: mime, name: name });
+    var tries = 0;
+    while (!st.complete) {
+      try {
+        var part = file.slice(st.received, Math.min(st.size, st.received + CHUNK));
+        st = await api("PUT", "/api/media/" + encodeURIComponent(st.mediaId) + "?offset=" + st.received, part);
+        tries = 0;
+      } catch (e) {
+        if (e.status && e.status < 500 && e.code !== "wrong_offset") throw e;
+        if (++tries > 5) throw e;
+        await new Promise(function (r) { setTimeout(r, 2000 * tries); });
+        st = await api("GET", "/api/media/" + encodeURIComponent(st.mediaId) + "/status");
+      }
+      if (onProgress) onProgress(st.received / st.size);
+    }
+    return { mediaId: st.mediaId, sha256: sha256 };
+  }
+
+  async function sendFile(file, caption) {
+    if (!state.current) return;
+    if (!file.size) { toast("Arquivo vazio: " + file.name); return; }
+    if (file.size > MAX_WEB_UPLOAD) { toast("Pelo computador, o máximo é 1 GB. Mande pelo celular."); return; }
+    var conv = state.current;
+    var mime = file.type || "application/octet-stream";
+    var kind = kindOf(mime);
+    var id = uuid();
+    var att = { mediaId: "", kind: kind, mime: mime, name: file.name || "arquivo", size: file.size, sha256: "" };
+    var m = { id: id, conversationId: conv, authorId: state.me.id, body: caption || "", createdAt: Date.now(), seq: null, status: "pending", attachment: att };
+    (state.messages[conv] = state.messages[conv] || []).push(m);
+    state.uploads[id] = 0;
+    renderConvs(); if (conv === state.current) renderChat(true);
+    function progress(p) { state.uploads[id] = p; if (conv === state.current) renderChat(); }
+    try {
+      if (kind === "image") att.thumb = await imageThumb(file);
+      var dur = await mediaDuration(file, kind);
+      if (dur) att.durationMs = dur;
+      var st = await uploadMedia(file, mime, att.name, progress);
+      att.sha256 = st.sha256;
+      att.mediaId = st.mediaId;
+      delete state.uploads[id];
+      var frame = { type: "send", id: id, conversationId: conv, body: caption || "", attachment: att };
+      state.pendingSends[id] = frame;
+      send(frame);
+      renderChat();
+    } catch (e) {
+      delete state.uploads[id];
+      m.status = "failed";
+      toast("Não consegui enviar " + att.name + ": " + e.message);
+      renderChat();
+    }
+  }
+
+  // ---------- fotos passam pelo editor antes de enviar ----------
+  var EDITABLE = /^image\/(jpeg|png|webp|bmp)$/;
+  function handleFiles(list) {
+    var files = Array.prototype.slice.call(list);
+    var images = files.filter(function (f) { return EDITABLE.test(f.type) && f.size <= 40 * 1024 * 1024; });
+    files.filter(function (f) { return images.indexOf(f) < 0; }).forEach(function (f) { sendFile(f, ""); });
+    if (images.length) Editor.open(images, state.current);
+  }
+
+  // ---------- configurações (foto e nome) ----------
+  function renderSettings() {
+    if ($("settings").classList.contains("hidden") || !state.me) return;
+    setAvatar($("setAvatar"), state.me.name, state.me.avatarMediaId);
+    $("setNoPhoto").classList.toggle("hidden", !state.me.avatarMediaId);
+    $("setPhoto").textContent = state.me.avatarMediaId ? "Trocar foto" : "Escolher foto";
+    $("setConn").innerHTML = '<span class="dot' + (state.online ? " on" : "") + '"></span> ' + (state.online ? "online" : "sem conexão");
+    $("setHost").textContent = location.host;
+    $("setSave").disabled = !$("setName").value.trim() || $("setName").value.trim() === state.me.name;
+  }
+  function setMsg(text, ok) { $("setMsg").textContent = text || ""; $("setMsg").style.color = ok ? "var(--online)" : "var(--error)"; }
+  $("settingsBtn").onclick = function () {
+    $("settings").classList.remove("hidden");
+    $("setName").value = state.me ? state.me.name : "";
+    setMsg("");
+    renderSettings();
+  };
+  $("meAvatar").style.cursor = "pointer";
+  $("meAvatar").onclick = $("settingsBtn").onclick;
+  $("setClose").onclick = function () { $("settings").classList.add("hidden"); };
+  $("settings").onclick = function (e) { if (e.target === $("settings")) $("settings").classList.add("hidden"); };
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") $("settings").classList.add("hidden"); });
+  $("setName").oninput = renderSettings;
+  $("setName").onkeydown = function (e) { if (e.key === "Enter" && !$("setSave").disabled) $("setSave").onclick(); };
+  $("setSave").onclick = async function () {
+    var name = $("setName").value.trim();
+    $("setSave").disabled = true;
+    setMsg("Salvando…", true);
+    try {
+      await request({ type: "update_profile", name: name });
+      setMsg("Nome salvo ✔", true);
+    } catch (e) { setMsg(e.message); }
+    renderSettings();
+  };
+  $("setPhoto").onclick = function () { $("setPhotoInput").click(); };
+  $("setAvatar").onclick = $("setPhoto").onclick;
+  $("setNoPhoto").onclick = async function () {
+    setMsg("Tirando a foto…", true);
+    try { await request({ type: "update_profile", avatarMediaId: "" }); setMsg("Foto removida ✔", true); }
+    catch (e) { setMsg(e.message); }
+  };
+  // Foto de perfil: quadrado do meio da foto, 512×512, JPEG (igual ao celular).
+  function squareJpeg(file) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () {
+        var side = Math.min(img.width, img.height), out = Math.min(512, side);
+        var c = document.createElement("canvas"); c.width = out; c.height = out;
+        c.getContext("2d").drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, out, out);
+        URL.revokeObjectURL(url);
+        c.toBlob(function (b) { b ? resolve(b) : reject(new Error("Não consegui preparar a foto.")); }, "image/jpeg", 0.88);
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error("Não consegui abrir essa foto. Escolha outra.")); };
+      img.src = url;
+    });
+  }
+  $("setPhotoInput").onchange = async function () {
+    var f = $("setPhotoInput").files[0];
+    $("setPhotoInput").value = "";
+    if (!f) return;
+    setMsg("Enviando a foto…", true);
+    try {
+      var blob = await squareJpeg(f);
+      var up = await uploadMedia(blob, "image/jpeg", "perfil.jpg");
+      await request({ type: "update_profile", avatarMediaId: up.mediaId });
+      setMsg("Foto trocada ✔", true);
+    } catch (e) { setMsg(e.message); }
+  };
+  $("setLogout").onclick = function () { $("logout").onclick(); };
+
+  // ---------- editor de foto (recortar, girar, desenhar, texto, emoji) ----------
+  var Editor = (function () {
+    var COLORS = ["#ffffff", "#000000", "#e53935", "#fb8c00", "#fdd835", "#43a047", "#1e88e5", "#8e24aa", "#ec407a"];
+    var EMOJIS = "😀 😂 🥰 😍 😎 😢 😮 😡 👍 👎 👏 🙏 💪 🎉 ❤️ 💔 🔥 ⭐ ✅ ❌ ❓ ❗ 👉 👈 👆 👇 ➡️ ⬅️ ⬆️ ⬇️ ⭕ 💯 🎂 🎁 ☀️ 🌧️ 🐶 🐱 🌹 🍕 ⚽ 🚗 🏠 📍 ⏰ 💰".split(" ");
+    var MAX_SIDE = 4096;
+    var canvas = $("edCanvas"), ctx = canvas.getContext("2d");
+    var queue = [], current = null, convId = null;
+    var tool = null, color = "#e53935", undo = [], dirty = false;
+    var items = [];   // textos e emojis ainda soltos (podem ser arrastados)
+    var crop = null;  // { x, y, w, h } em pixels da foto
+
+    function snapshot() {
+      var c = document.createElement("canvas"); c.width = canvas.width; c.height = canvas.height;
+      c.getContext("2d").drawImage(canvas, 0, 0);
+      undo.push(c);
+      if (undo.length > 20) undo.shift();
+      $("edUndo").disabled = false;
+    }
+    function restore() {
+      var c = undo.pop();
+      if (!c) return;
+      canvas.width = c.width; canvas.height = c.height;
+      ctx.drawImage(c, 0, 0);
+      $("edUndo").disabled = !undo.length;
+      if (crop) showCrop();
+    }
+    // Quantos pixels da foto há em 1 pixel da tela.
+    function factor() { var r = canvas.getBoundingClientRect(); return canvas.width / r.width; }
+    function toImage(clientX, clientY) {
+      var r = canvas.getBoundingClientRect(), k = canvas.width / r.width;
+      return { x: (clientX - r.left) * k, y: (clientY - r.top) * k };
+    }
+
+    function open(files, conversation) {
+      queue = queue.concat(files);
+      convId = conversation;
+      if (!current) next();
+    }
+    function next() {
+      current = queue.shift() || null;
+      if (!current) { close(); return; }
+      var url = URL.createObjectURL(current);
+      var img = new Image();
+      img.onload = function () {
+        var k = Math.min(1, MAX_SIDE / Math.max(img.width, img.height));
+        canvas.width = Math.round(img.width * k); canvas.height = Math.round(img.height * k);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(url);
+        undo = []; dirty = false; items.forEach(function (it) { it.el.remove(); }); items = []; crop = null;
+        $("edUndo").disabled = true;
+        $("edCaption").value = "";
+        $("edTitle").textContent = (current.name || "Foto") + (queue.length ? " · mais " + queue.length : "");
+        $("editor").classList.remove("hidden");
+        setTool(null);
+        $("edCaption").focus();
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); sendFile(current, ""); next(); };
+      img.src = url;
+    }
+    function close() {
+      $("editor").classList.add("hidden");
+      items.forEach(function (it) { it.el.remove(); }); items = [];
+      hideCrop(); current = null; queue = []; undo = [];
+    }
+
+    // ----- ferramentas -----
+    function setTool(t) {
+      if (tool === "crop" && t !== "crop") hideCrop();
+      if (t !== "text" && t !== "emoji") bakeItems();
+      tool = (tool === t && t !== null) ? null : t;
+      Array.prototype.forEach.call(document.querySelectorAll("#editor [data-tool]"), function (b) {
+        b.classList.toggle("on", b.getAttribute("data-tool") === tool);
+      });
+      canvas.classList.toggle("draw", tool === "draw");
+      var sub = $("edSub");
+      sub.innerHTML = "";
+      if (tool === "draw" || tool === "text") {
+        COLORS.forEach(function (c) {
+          var b = document.createElement("button");
+          b.className = "swatch" + (c === color ? " on" : ""); b.style.background = c; b.title = "Cor";
+          b.onclick = function () {
+            color = c;
+            Array.prototype.forEach.call(sub.querySelectorAll(".swatch"), function (x) { x.classList.toggle("on", x === b); });
+            var sel = items.filter(function (it) { return it.el === document.activeElement || it.selected; });
+            sel.forEach(function (it) { it.color = c; it.el.style.color = c; });
+          };
+          sub.appendChild(b);
+        });
+        var h = document.createElement("span"); h.className = "hint";
+        h.textContent = tool === "draw" ? "Arraste na foto para desenhar." : "Clique na foto para escrever. Arraste o texto para mudar de lugar; rodinha do mouse muda o tamanho.";
+        sub.appendChild(h);
+      } else if (tool === "emoji") {
+        var box = document.createElement("div"); box.id = "edEmojis";
+        EMOJIS.forEach(function (em) {
+          var b = document.createElement("button"); b.textContent = em;
+          b.onclick = function () { addItem(em, true); };
+          box.appendChild(b);
+        });
+        sub.appendChild(box);
+      } else if (tool === "crop") {
+        sub.innerHTML = '<span class="hint">Arraste os cantos para escolher a parte da foto.</span>';
+        var ok = document.createElement("button"); ok.className = "tool on"; ok.textContent = "✓ Aplicar recorte";
+        ok.onclick = applyCrop;
+        sub.appendChild(ok);
+        showCrop(true);
+      } else {
+        sub.innerHTML = '<span class="hint">Use as ferramentas acima para editar, ou envie assim mesmo.</span>';
+      }
+    }
+    Array.prototype.forEach.call(document.querySelectorAll("#editor [data-tool]"), function (b) {
+      b.onclick = function () { setTool(b.getAttribute("data-tool")); };
+    });
+
+    // Girar 90° para a direita.
+    $("edRotate").onclick = function () {
+      bakeItems(); hideCrop(); if (tool === "crop") setTool(null);
+      snapshot();
+      var c = document.createElement("canvas"); c.width = canvas.height; c.height = canvas.width;
+      var x = c.getContext("2d");
+      x.translate(c.width, 0); x.rotate(Math.PI / 2); x.drawImage(canvas, 0, 0);
+      canvas.width = c.width; canvas.height = c.height; ctx.drawImage(c, 0, 0);
+      dirty = true;
+    };
+    $("edUndo").onclick = function () { if (items.length) { var it = items.pop(); it.el.remove(); return; } restore(); };
+
+    // ----- desenhar -----
+    var drawing = null;
+    canvas.addEventListener("pointerdown", function (e) {
+      if (tool === "draw") {
+        e.preventDefault();
+        canvas.setPointerCapture(e.pointerId);
+        snapshot();
+        var p = toImage(e.clientX, e.clientY);
+        drawing = p;
+        ctx.strokeStyle = color; ctx.fillStyle = color;
+        ctx.lineWidth = Math.max(3, Math.round(Math.max(canvas.width, canvas.height) / 180));
+        ctx.lineCap = "round"; ctx.lineJoin = "round";
+        ctx.beginPath(); ctx.arc(p.x, p.y, ctx.lineWidth / 2, 0, Math.PI * 2); ctx.fill();
+        dirty = true;
+      } else if (tool === "text") {
+        e.preventDefault(); // não deixa o clique tirar o cursor do texto novo
+        var r = canvas.getBoundingClientRect();
+        addItem("", false, e.clientX - r.left, e.clientY - r.top);
+      }
+    });
+    canvas.addEventListener("pointermove", function (e) {
+      if (!drawing) return;
+      var p = toImage(e.clientX, e.clientY);
+      ctx.beginPath(); ctx.moveTo(drawing.x, drawing.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+      drawing = p;
+    });
+    function stopDraw() { drawing = null; }
+    canvas.addEventListener("pointerup", stopDraw);
+    canvas.addEventListener("pointercancel", stopDraw);
+
+    // ----- textos e emojis (soltos até enviar, para poder arrastar) -----
+    function addItem(text, isEmoji, sx, sy) {
+      var stage = $("edStage"), cr = canvas.getBoundingClientRect(), sr = stage.getBoundingClientRect();
+      var el = document.createElement("div");
+      el.className = "ed-item";
+      el.textContent = text;
+      var it = { el: el, emoji: isEmoji, color: color, size: isEmoji ? 64 : 34,
+                 x: sx != null ? sx : cr.width / 2, y: sy != null ? sy : cr.height / 2 };
+      el.style.color = isEmoji ? "#000" : color;
+      el.style.fontSize = it.size + "px";
+      if (!isEmoji) {
+        el.contentEditable = "true";
+        el.setAttribute("data-placeholder", "Escreva…");
+      }
+      function place() {
+        var cr2 = canvas.getBoundingClientRect(), sr2 = stage.getBoundingClientRect();
+        el.style.left = (cr2.left - sr2.left + it.x) + "px";
+        el.style.top = (cr2.top - sr2.top + it.y) + "px";
+        el.style.fontSize = it.size + "px";
+      }
+      it.place = place;
+      place();
+      stage.appendChild(el);
+      items.push(it);
+      dirty = true;
+      // Arrastar
+      var start = null;
+      el.addEventListener("pointerdown", function (e) {
+        items.forEach(function (o) { o.selected = (o === it); });
+        start = { x: e.clientX, y: e.clientY, ix: it.x, iy: it.y, moved: false };
+        el.setPointerCapture(e.pointerId);
+        e.stopPropagation();
+      });
+      el.addEventListener("pointermove", function (e) {
+        if (!start) return;
+        var dx = e.clientX - start.x, dy = e.clientY - start.y;
+        if (Math.abs(dx) + Math.abs(dy) > 3) start.moved = true;
+        if (!start.moved) return;
+        it.x = start.ix + dx; it.y = start.iy + dy; place();
+        e.preventDefault();
+      });
+      el.addEventListener("pointerup", function () { if (start && !start.moved && !isEmoji) el.focus(); start = null; });
+      // Rodinha: tamanho
+      el.addEventListener("wheel", function (e) {
+        e.preventDefault();
+        it.size = Math.max(14, Math.min(220, it.size * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
+        place();
+      }, { passive: false });
+      el.addEventListener("blur", function () {
+        if (!isEmoji && !el.textContent.trim()) { el.remove(); items = items.filter(function (o) { return o !== it; }); }
+      });
+      if (!isEmoji) { el.focus(); setTimeout(function () { el.focus(); }, 0); }
+      return it;
+    }
+    window.addEventListener("resize", function () { items.forEach(function (it) { it.place(); }); if (crop) showCrop(); });
+
+    // Grava textos e emojis na foto.
+    function bakeItems() {
+      if (!items.length) return;
+      var live = items.filter(function (it) { return it.el.textContent.trim(); });
+      if (live.length) snapshot();
+      var k = factor();
+      live.forEach(function (it) {
+        var size = it.size * k;
+        ctx.save();
+        ctx.font = "bold " + size + "px system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        var lines = it.el.innerText.replace(/\n$/, "").split("\n");
+        var lh = size * 1.15, top = it.y * k - (lines.length - 1) * lh / 2;
+        lines.forEach(function (line, i) {
+          var y = top + i * lh;
+          if (!it.emoji) {
+            ctx.lineWidth = Math.max(2, size / 8); ctx.strokeStyle = it.color === "#000000" ? "#ffffff" : "#000000";
+            ctx.lineJoin = "round"; ctx.strokeText(line, it.x * k, y);
+            ctx.fillStyle = it.color;
+          } else ctx.fillStyle = "#000";
+          ctx.fillText(line, it.x * k, y);
+        });
+        ctx.restore();
+      });
+      items.forEach(function (it) { it.el.remove(); });
+      items = [];
+    }
+
+    // ----- recortar -----
+    var cropEl = null;
+    function showCrop(reset) {
+      if (reset || !crop) crop = { x: 0, y: 0, w: canvas.width, h: canvas.height };
+      if (!cropEl) {
+        cropEl = document.createElement("div"); cropEl.id = "edCrop";
+        cropEl.innerHTML = '<div class="grid"></div><div class="h nw"></div><div class="h ne"></div><div class="h sw"></div><div class="h se"></div>';
+        $("edStage").appendChild(cropEl);
+        var drag = null;
+        cropEl.addEventListener("pointerdown", function (e) {
+          e.preventDefault(); e.stopPropagation();
+          cropEl.setPointerCapture(e.pointerId);
+          var h = e.target.classList.contains("h") ? e.target.className.split(" ")[1] : "move";
+          drag = { h: h, p: toImage(e.clientX, e.clientY), c: Object.assign({}, crop) };
+        });
+        cropEl.addEventListener("pointermove", function (e) {
+          if (!drag) return;
+          var p = toImage(e.clientX, e.clientY), dx = p.x - drag.p.x, dy = p.y - drag.p.y, c = drag.c, n = Object.assign({}, c);
+          var min = Math.max(20, Math.min(canvas.width, canvas.height) * 0.05);
+          if (drag.h === "move") {
+            n.x = Math.max(0, Math.min(canvas.width - c.w, c.x + dx));
+            n.y = Math.max(0, Math.min(canvas.height - c.h, c.y + dy));
+          } else {
+            var left = c.x, top = c.y, right = c.x + c.w, bottom = c.y + c.h;
+            if (drag.h.indexOf("w") >= 0) left = Math.max(0, Math.min(right - min, left + dx));
+            if (drag.h.indexOf("e") >= 0) right = Math.min(canvas.width, Math.max(left + min, right + dx));
+            if (drag.h.indexOf("n") >= 0) top = Math.max(0, Math.min(bottom - min, top + dy));
+            if (drag.h.indexOf("s") >= 0) bottom = Math.min(canvas.height, Math.max(top + min, bottom + dy));
+            n = { x: left, y: top, w: right - left, h: bottom - top };
+          }
+          crop = n; placeCrop();
+        });
+        cropEl.addEventListener("pointerup", function () { drag = null; });
+      }
+      cropEl.classList.remove("hidden");
+      placeCrop();
+    }
+    function placeCrop() {
+      var cr = canvas.getBoundingClientRect(), sr = $("edStage").getBoundingClientRect(), k = cr.width / canvas.width;
+      cropEl.style.left = (cr.left - sr.left + crop.x * k) + "px";
+      cropEl.style.top = (cr.top - sr.top + crop.y * k) + "px";
+      cropEl.style.width = (crop.w * k) + "px";
+      cropEl.style.height = (crop.h * k) + "px";
+    }
+    function hideCrop() { if (cropEl) cropEl.classList.add("hidden"); }
+    function applyCrop() {
+      var c = { x: Math.round(crop.x), y: Math.round(crop.y), w: Math.round(crop.w), h: Math.round(crop.h) };
+      if (c.w < canvas.width || c.h < canvas.height) {
+        snapshot();
+        var tmp = document.createElement("canvas"); tmp.width = c.w; tmp.height = c.h;
+        tmp.getContext("2d").drawImage(canvas, c.x, c.y, c.w, c.h, 0, 0, c.w, c.h);
+        canvas.width = c.w; canvas.height = c.h; ctx.drawImage(tmp, 0, 0);
+        dirty = true;
+      }
+      crop = null;
+      setTool(null);
+    }
+
+    // ----- enviar / cancelar -----
+    function finish() {
+      if (tool === "crop") applyCrop();
+      bakeItems();
+      var file = current, caption = $("edCaption").value.trim(), conv = convId;
+      if (!dirty) { sendTo(conv, file, caption); next(); return; }
+      var png = file.type === "image/png";
+      canvas.toBlob(function (blob) {
+        var base = (file.name || "foto").replace(/\.[^.]+$/, "");
+        var edited = new File([blob], base + (png ? ".png" : ".jpg"), { type: png ? "image/png" : "image/jpeg" });
+        sendTo(conv, edited, caption);
+        next();
+      }, png ? "image/png" : "image/jpeg", 0.92);
+    }
+    function sendTo(conv, file, caption) {
+      var keep = state.current;
+      state.current = conv;
+      sendFile(file, caption);
+      state.current = keep;
+    }
+    $("edSend").onclick = finish;
+    $("edCaption").addEventListener("keydown", function (e) { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); finish(); } });
+    $("edCancel").onclick = function () { items.forEach(function (it) { it.el.remove(); }); items = []; hideCrop(); next(); };
+    document.addEventListener("keydown", function (e) {
+      if ($("editor").classList.contains("hidden")) return;
+      if (e.key === "Escape" && document.activeElement && document.activeElement.classList.contains("ed-item")) { document.activeElement.blur(); return; }
+      if (e.key === "Escape") $("edCancel").onclick();
+      if ((e.ctrlKey || e.metaKey) && e.key === "z" && !(document.activeElement && document.activeElement.isContentEditable)) { e.preventDefault(); $("edUndo").onclick(); }
+    });
+    return { open: open };
+  })();
+
+  // ---------- sair ----------
+  $("logout").onclick = async function () {
+    if (!confirm("Desligar o Falaí deste computador? Para usar de novo, é só ler o QR Code outra vez.")) return;
+    try { await api("POST", "/api/web/logout"); } catch (e) { /* mesmo assim sai */ }
+    var ws = state.ws; state.ws = null; if (ws) ws.close();
+    location.reload();
+  };
+
+  start();
+})();
+</script>
+</body>
+</html>

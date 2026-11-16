@@ -6,6 +6,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.receiveChannel
 import io.ktor.server.request.receiveText
+import io.ktor.server.response.respond
 import io.ktor.server.response.respondFile
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
@@ -101,8 +102,9 @@ private suspend fun ApplicationCall.respondError(e: FalaiException) {
 }
 
 private fun ApplicationCall.authed(store: Store): AuthedDevice {
-    val token = request.headers["Authorization"]?.removePrefix("Bearer ")?.trim()
-    return token?.takeIf { it.isNotEmpty() }?.let(store::authenticate)
+    // Navegador (cookie): envios só da própria página; baixar (GET) vale para <img> e <video>.
+    val token = tokenFrom(this, checkOrigin = request.local.method != io.ktor.http.HttpMethod.Get)
+    return token?.let(store::authenticate)
         ?: throw FalaiException("unauthorized", "Aparelho não autorizado.")
 }
 
@@ -188,7 +190,17 @@ fun Route.mediaRoutes(store: Store, files: MediaFiles, log: (String) -> Unit = {
             call.response.headers.append("X-Content-SHA256", m.sha256)
             // Ajuda a achar problema: a tela do servidor mostra quem pegou fotos de perfil.
             if (store.isAvatar(id)) log("Foto de perfil enviada para ${device.user.name}")
-            call.respondFile(f)
+            // No navegador: o tipo certo (para <img>/<video> tocarem) e o nome ao salvar.
+            if (call.request.queryParameters["download"] == "1") {
+                call.response.headers.append(
+                    io.ktor.http.HttpHeaders.ContentDisposition,
+                    io.ktor.http.ContentDisposition.Attachment
+                        .withParameter(io.ktor.http.ContentDisposition.Parameters.FileName, m.name)
+                        .toString(),
+                )
+            }
+            val type = runCatching { io.ktor.http.ContentType.parse(m.mime) }.getOrDefault(io.ktor.http.ContentType.Application.OctetStream)
+            call.respond(io.ktor.server.http.content.LocalFileContent(f, type))
         }
     }
 }

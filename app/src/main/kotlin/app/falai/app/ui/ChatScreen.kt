@@ -97,10 +97,10 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
 
     // ---------- Anexar ----------
 
-    fun sendCopied(c: CopiedFile?) {
+    fun sendCopied(c: CopiedFile?, captionOverride: String? = null) {
         if (c == null) return
         val kind = kindForMime(c.mime)
-        val caption = text
+        val caption = captionOverride ?: text
         text = ""
         scope.launch {
             try {
@@ -125,14 +125,25 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
         }
     }
 
-    val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { copyAndSend(it) }
+    // Foto escolhida ou tirada passa antes pelo editor (recortar, desenhar, texto...).
+    var editingPhoto by remember { mutableStateOf<CopiedFile?>(null) }
+    val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) scope.launch {
+            val copied = withContext(Dispatchers.IO) { copyFromUri(context, uri) }
+            when {
+                copied == null -> Toast.makeText(context, "Não consegui ler o arquivo.", Toast.LENGTH_LONG).show()
+                isEditableImage(copied.mime) -> editingPhoto = copied
+                else -> sendCopied(copied)
+            }
+        }
+    }
     val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { copyAndSend(it) }
 
     var cameraFile by remember { mutableStateOf<File?>(null) }
     val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
         val f = cameraFile
         cameraFile = null
-        if (ok && f != null && f.length() > 0) sendCopied(CopiedFile(f, f.name, "image/jpeg")) else f?.delete()
+        if (ok && f != null && f.length() > 0) editingPhoto = CopiedFile(f, f.name, "image/jpeg") else f?.delete()
     }
     val takeVideo = rememberLauncherForActivityResult(ActivityResultContracts.CaptureVideo()) { ok ->
         val f = cameraFile
@@ -367,6 +378,13 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
             }
         }
     }
+    }
+    editingPhoto?.let { photo ->
+        ImageEditor(
+            photo, initialCaption = text,
+            onCancel = { editingPhoto = null; photo.file.delete() },
+            onSend = { ready, caption -> editingPhoto = null; sendCopied(ready, caption) },
+        )
     }
     viewing?.let { (f, m) ->
         MediaViewer(

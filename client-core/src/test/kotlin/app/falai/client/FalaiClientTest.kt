@@ -620,4 +620,18 @@ class FalaiClientTest {
         val m = beto.forward(conv3, falso)
         eventually("servidor recusar") { beto.store.messageById(m.id)?.status == MessageStatus.FAILED }
     }
+
+    @Test
+    fun `celular liga o navegador pelo QR Code`() = runBlocking {
+        val (chefe, _, _) = family()
+        val link = server.webLinks.create("Chrome no Windows")
+        // Código errado: mensagem clara, sem ir ao servidor.
+        val ruim = runCatching { chefe.approveWeb("https://outra-coisa.com") }.exceptionOrNull()
+        assertTrue(ruim is FalaiClientException && ruim.code == "invalid", "$ruim")
+        assertEquals("Chrome no Windows", chefe.approveWeb("falai://web?c=" + link.code))
+        assertNotNull(link.token)
+        // O mesmo QR Code não serve de novo.
+        val de_novo = runCatching { chefe.approveWeb(link.code) }.exceptionOrNull()
+        assertTrue(de_novo is FalaiClientException && de_novo.code == "not_found", "$de_novo")
+    }
 }

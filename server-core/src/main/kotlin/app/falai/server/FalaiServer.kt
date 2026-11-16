@@ -137,6 +137,9 @@ class FalaiServer(
     private val limiter = FailureLimiter(config.pairMaxFailures, config.pairWindowMs, clock)
     private val mediaFiles = MediaFiles(config.mediaDir, store, this.log)
     private val invites = InviteSupport(store, config.mediaDir, this.log)
+    /** Falaí no computador: QR Codes esperando o celular, e um limite de pedidos por endereço. */
+    val webLinks = WebLinks(clock)
+    private val webLimiter = FailureLimiter(30, 10 * 60_000L, clock)
 
     /** Endereço público aprendido pela Cloudflare (ex.: https://falai.falaifamilia.net), ou null. */
     fun publicBase(): String? = invites.publicBase()
@@ -175,6 +178,7 @@ class FalaiServer(
     private fun json(frame: ServerFrame) = FalaiJson.encodeToString(ServerFrame.serializer(), frame)
 
     fun Application.module() {
+        install(io.ktor.server.plugins.partialcontent.PartialContent)
         install(WebSockets) {
             pingPeriod = 20.seconds
             timeout = 45.seconds
@@ -230,14 +234,15 @@ class FalaiServer(
 
             mediaRoutes(store, mediaFiles, log)
             inviteRoutes(store, invites, limiter, ::clientKey)
+            webRoutes(store, webLinks, webLimiter, ::clientKey, log)
 
             webSocket("/ws") { handleSocket() }
         }
     }
 
     private suspend fun DefaultWebSocketServerSession.handleSocket() {
-        val token = call.request.headers["Authorization"]?.removePrefix("Bearer ")?.trim()
-        val device = token?.takeIf { it.isNotEmpty() }?.let(store::authenticate)
+        // App: cabeçalho Authorization. Navegador: cookie (só vindo da própria página).
+        val device = tokenFrom(call, checkOrigin = true)?.let(store::authenticate)
         if (device == null) {
             close(CloseReason(4001, "unauthorized"))
             return
@@ -308,6 +313,7 @@ class FalaiServer(
         is CreateInviteFrame -> f.requestId
         is PingFrame -> f.requestId
         is SetPublicAddressFrame -> f.requestId
+        is ApproveWebFrame -> f.requestId
         is UpdateProfileFrame -> f.requestId
         is SyncFrame -> null
     }
@@ -324,6 +330,18 @@ class FalaiServer(
                 reply(UserUpdatedFrame(f.requestId, u))
                 // Todos os outros aparelhos (da família toda) veem o nome/foto novos.
                 hub.deliverAll(UserUpdatedFrame(null, u), exceptDeviceId = device.deviceId)
+            }
+
+            is ApproveWebFrame -> {
+                val code = WebLinkCodes.parse(f.code)
+                    ?: throw FalaiException("invalid", "Código inválido. Confira o QR Code na tela do computador.")
+                val link = webLinks.byCode(code)
+                    ?: throw FalaiException("not_found", "Esse QR Code já venceu. Atualize a página no computador e tente de novo.")
+                val (deviceId, token) = store.createLinkedDevice(device.user.id, link.browser)
+                link.approvedBy = device.user.id
+                link.token = token
+                log("Navegador ligado: ${conn.name} (${link.browser}, ${deviceId.take(8)})")
+                reply(WebApprovedFrame(f.requestId, link.browser))
             }
 
             is SetPublicAddressFrame -> {
