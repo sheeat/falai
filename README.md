@@ -2,7 +2,7 @@
 
 Mensageiro da família. Um celular antigo fica em casa como servidor, e os celulares e tablets da família se conectam a ele pela internet através do Cloudflare Tunnel.
 
-## Estado atual: M6 (Falaí no computador)
+## Estado atual: 0.7 (editor de fotos)
 
 | Parte | O que faz | Testado |
 |---|---|---|
@@ -27,7 +27,11 @@ Mensageiro da família. Um celular antigo fica em casa como servidor, e os celul
 
 **No computador (M6):** abra `https://falai.SEUDOMINIO/web` no navegador. A página mostra um QR Code. No celular, vá em *Configurações → Falaí no computador → Ler o QR Code* (ou digite o código de 8 letras). As conversas aparecem no navegador: ler, escrever, ver e mandar fotos, vídeos, áudios e arquivos (até 1 GB; arraste e solte ou Ctrl+V), salvar, avisos do navegador. O navegador vira um "aparelho" da pessoa: a chave fica num cookie protegido (o JavaScript da página não lê, e outros sites não usam). *Sair* desliga o computador.
 
-Ainda não tem: notificações com o app fechado (FCM), editor de fotos/vídeo, chamadas, criptografia no app.
+**Editor de fotos e perfil no computador (0.7):**
+- Antes de mandar uma foto (escolhida, tirada com a câmera, arrastada ou colada com Ctrl+V), abre um editor como o do WhatsApp: *Recortar* (arrastando os cantos), *Girar*, *Desenhar* (com cores), *Texto* (arrastável, com cores e tamanho), *Emoji*, *Desfazer* e legenda. No celular e no computador. Se não mexer em nada, vai a foto original, idêntica.
+- No computador, a engrenagem (ou a sua foto no topo) abre as **Configurações**: trocar ou tirar a foto de perfil e mudar o nome, igual ao celular.
+
+Ainda não tem: notificações com o app fechado (FCM), editor de vídeo, chamadas, criptografia no app.
 
 ## Rodar os testes (PC)
 

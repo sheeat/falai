@@ -125,6 +125,57 @@
                  background: rgba(0,0,0,.4); padding: 4px 12px; border-radius: 12px; pointer-events: none; }
   .topbar .avatar { box-shadow: 0 0 0 2px rgba(255,255,255,.75); }
 
+  /* ---------- Configurações ---------- */
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 12; padding: 16px; }
+  .sheet { background: #fff; border-radius: 16px; width: 100%; max-width: 440px; max-height: 100%; overflow-y: auto; box-shadow: 0 10px 40px rgba(0,0,0,.25); }
+  .sheet .head { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--divider); font-weight: 700; font-size: 18px; }
+  .sheet .head .grow { flex: 1; }
+  .sheet .head button { background: transparent; border: 0; font-size: 20px; width: 36px; height: 36px; border-radius: 50%; }
+  .sheet .head button:hover { background: var(--hover); }
+  .sheet .body { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+  .sheet .big { width: 140px; height: 140px; font-size: 56px; margin: 0 auto; cursor: pointer; }
+  .sheet .row { display: flex; gap: 8px; justify-content: center; }
+  .sheet label { font-weight: 600; font-size: 14px; }
+  .sheet input[type=text] { width: 100%; padding: 10px 14px; border: 1px solid var(--divider); border-radius: 10px; font: inherit; font-size: 16px; outline: none; }
+  .sheet input[type=text]:focus { border-color: var(--primary); }
+  .sheet .info { display: grid; grid-template-columns: 140px 1fr; gap: 6px 10px; font-size: 14px; }
+  .sheet .info span:nth-child(odd) { color: var(--text-sec); }
+  .sheet .msgline { text-align: center; font-size: 14px; min-height: 18px; }
+  .btn:disabled { opacity: .45; cursor: default; }
+
+  /* ---------- Editor de foto ---------- */
+  #editor { position: fixed; inset: 0; background: #111; z-index: 15; display: flex; flex-direction: column; color: #fff; user-select: none; }
+  #editor .bar { display: flex; align-items: center; gap: 6px; padding: 8px 12px; flex-wrap: wrap; }
+  #editor .bar .grow { flex: 1; min-width: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: #ccc; }
+  #editor .tool { background: rgba(255,255,255,.1); color: #fff; border: 0; border-radius: 18px; padding: 8px 14px; font-weight: 600; font-size: 14px; }
+  #editor .tool:hover { background: rgba(255,255,255,.2); }
+  #editor .tool.on { background: var(--primary); }
+  #editor .tool:disabled { opacity: .35; cursor: default; }
+  #editor .sub { display: flex; align-items: center; gap: 8px; padding: 0 12px 8px; min-height: 44px; flex-wrap: wrap; justify-content: center; }
+  #editor .sub .hint { font-size: 13px; color: #bbb; }
+  #editor .swatch { width: 28px; height: 28px; border-radius: 50%; border: 2px solid rgba(255,255,255,.6); cursor: pointer; padding: 0; }
+  #editor .swatch.on { outline: 3px solid #fff; outline-offset: 2px; }
+  #edStage { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; min-height: 0; overflow: hidden; padding: 8px; }
+  #edCanvas { max-width: 100%; max-height: 100%; touch-action: none; background: repeating-conic-gradient(#333 0 25%, #444 0 50%) 0 0/20px 20px; }
+  #edCanvas.draw { cursor: crosshair; }
+  .ed-item { position: absolute; transform: translate(-50%, -50%); cursor: move; white-space: pre; font-weight: 700; line-height: 1.15;
+             padding: 2px 6px; border: 2px dashed rgba(255,255,255,.8); border-radius: 6px; touch-action: none;
+             text-shadow: 0 0 3px #000, 0 0 3px #000; }
+  .ed-item:focus { outline: none; }
+  #edCrop { position: absolute; border: 2px solid #fff; box-shadow: 0 0 0 9999px rgba(0,0,0,.55); touch-action: none; cursor: move; }
+  #edCrop .h { position: absolute; width: 22px; height: 22px; background: #fff; border-radius: 50%; border: 3px solid var(--primary); }
+  #edCrop .h.nw { left: -12px; top: -12px; cursor: nwse-resize; } #edCrop .h.ne { right: -12px; top: -12px; cursor: nesw-resize; }
+  #edCrop .h.sw { left: -12px; bottom: -12px; cursor: nesw-resize; } #edCrop .h.se { right: -12px; bottom: -12px; cursor: nwse-resize; }
+  #edCrop .grid { position: absolute; inset: 0; background:
+      linear-gradient(to right, transparent 33%, rgba(255,255,255,.35) 33%, rgba(255,255,255,.35) calc(33% + 1px), transparent calc(33% + 1px), transparent 66%, rgba(255,255,255,.35) 66%, rgba(255,255,255,.35) calc(66% + 1px), transparent calc(66% + 1px)),
+      linear-gradient(to bottom, transparent 33%, rgba(255,255,255,.35) 33%, rgba(255,255,255,.35) calc(33% + 1px), transparent calc(33% + 1px), transparent 66%, rgba(255,255,255,.35) 66%, rgba(255,255,255,.35) calc(66% + 1px), transparent calc(66% + 1px)); pointer-events: none; }
+  #edEmojis { display: flex; flex-wrap: wrap; gap: 2px; max-width: 760px; justify-content: center; }
+  #edEmojis button { background: transparent; border: 0; font-size: 26px; width: 42px; height: 42px; border-radius: 8px; }
+  #edEmojis button:hover { background: rgba(255,255,255,.15); }
+  #editor .foot { display: flex; gap: 10px; align-items: center; padding: 10px 12px 14px; }
+  #edCaption { flex: 1; padding: 12px 16px; border-radius: 22px; border: 0; font: inherit; font-size: 15px; outline: none; }
+  #edSend { width: 50px; height: 50px; border-radius: 50%; border: 0; background: var(--primary); color: #fff; font-size: 22px; flex: none; }
+
   #toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: #333; color: #fff; padding: 10px 18px; border-radius: 20px;
            font-size: 14px; z-index: 20; max-width: calc(100% - 32px); }
 
@@ -172,6 +223,7 @@
         <div class="status"><span class="dot" id="dot"></span><span id="statusText">conectando…</span></div>
       </div>
       <button class="icon" id="bell" title="Avisar quando chegar mensagem">🔔</button>
+      <button class="icon" id="settingsBtn" title="Configurações (foto e nome)">⚙</button>
       <button class="textbtn" id="logout" title="Desligar o Falaí deste computador">Sair</button>
     </div>
     <input id="search" placeholder="Procurar conversa" autocomplete="off">
@@ -227,6 +279,52 @@
     <button id="vMute" title="Som">🔊</button>
   </div>
 </div>
+<!-- Configurações do perfil -->
+<div id="settings" class="modal hidden">
+  <div class="sheet">
+    <div class="head"><span class="grow">Configurações</span><button id="setClose" title="Fechar">✕</button></div>
+    <div class="body">
+      <div class="avatar big" id="setAvatar" title="Trocar a foto"></div>
+      <input type="file" id="setPhotoInput" accept="image/*" class="hidden">
+      <div class="row">
+        <button class="btn ghost" id="setPhoto">Trocar foto</button>
+        <button class="btn ghost" id="setNoPhoto">Tirar foto</button>
+      </div>
+      <label for="setName">Seu nome</label>
+      <input type="text" id="setName" maxlength="60" autocomplete="off">
+      <button class="btn" id="setSave" disabled>Salvar nome</button>
+      <div class="msgline" id="setMsg"></div>
+      <hr style="border:0;border-top:1px solid var(--divider);margin:4px 0">
+      <div class="info">
+        <span>Conexão</span><span id="setConn"></span>
+        <span>Servidor</span><span id="setHost"></span>
+        <span>Este computador</span><span>ligado ao seu Falaí</span>
+      </div>
+      <button class="btn ghost" id="setLogout">Sair deste computador</button>
+    </div>
+  </div>
+</div>
+
+<!-- Editor de foto, antes de enviar -->
+<div id="editor" class="hidden">
+  <div class="bar">
+    <button class="tool" id="edCancel" title="Não enviar esta foto">✕ Cancelar</button>
+    <span class="grow" id="edTitle"></span>
+    <button class="tool" data-tool="crop" title="Recortar">✂ Recortar</button>
+    <button class="tool" id="edRotate" title="Girar 90°">⟳ Girar</button>
+    <button class="tool" data-tool="draw" title="Desenhar">✏️ Desenhar</button>
+    <button class="tool" data-tool="text" title="Escrever na foto">T Texto</button>
+    <button class="tool" data-tool="emoji" title="Colocar emoji">😀 Emoji</button>
+    <button class="tool" id="edUndo" title="Desfazer (Ctrl+Z)" disabled>↶ Desfazer</button>
+  </div>
+  <div class="sub" id="edSub"></div>
+  <div id="edStage"><canvas id="edCanvas"></canvas></div>
+  <div class="foot">
+    <input id="edCaption" placeholder="Escreva uma legenda (opcional)" autocomplete="off">
+    <button id="edSend" title="Enviar (Enter)">➤</button>
+  </div>
+</div>
+
 <div id="toast" class="hidden"></div>
 
 <script>
@@ -418,7 +516,23 @@
     };
   }
 
+  // Pedidos que esperam resposta (ex.: trocar o nome): resolve quando a resposta chega.
+  var waiting = {};
+  function request(frame) {
+    return new Promise(function (resolve, reject) {
+      frame.requestId = uuid();
+      if (!send(frame)) { reject(new Error("Sem conexão com o servidor. Tente de novo em instantes.")); return; }
+      var timer = setTimeout(function () { delete waiting[frame.requestId]; reject(new Error("O servidor não respondeu. Tente de novo.")); }, 20000);
+      waiting[frame.requestId] = { resolve: function (f) { clearTimeout(timer); resolve(f); }, reject: function (e) { clearTimeout(timer); reject(e); } };
+    });
+  }
+
   function handle(f) {
+    if (f.requestId && waiting[f.requestId]) {
+      var w = waiting[f.requestId];
+      delete waiting[f.requestId];
+      if (f.type === "error") w.reject(new Error(f.message)); else w.resolve(f);
+    }
     switch (f.type) {
       case "hello":
         state.retry = 0;
@@ -439,7 +553,11 @@
         break;
       case "user_updated":
         state.users[f.user.id] = f.user;
-        if (state.me && f.user.id === state.me.id) setAvatar($("meAvatar"), f.user.name, f.user.avatarMediaId);
+        if (state.me && f.user.id === state.me.id) {
+          state.me = f.user;
+          setAvatar($("meAvatar"), f.user.name, f.user.avatarMediaId);
+          renderSettings();
+        }
         renderConvs(); renderChat();
         break;
       case "sync_batch":
@@ -869,7 +987,7 @@
   // ---------- mandar arquivos ----------
   $("attach").onclick = function () { $("fileInput").click(); };
   $("fileInput").onchange = function () {
-    Array.prototype.forEach.call($("fileInput").files, sendFile);
+    handleFiles($("fileInput").files);
     $("fileInput").value = "";
   };
   // Arrastar e soltar, e colar imagem (Ctrl+V).
@@ -879,11 +997,13 @@
   $("main").addEventListener("dragleave", function () { if (--dragDepth <= 0) { dragDepth = 0; $("drop").classList.add("hidden"); } });
   $("main").addEventListener("drop", function (e) {
     e.preventDefault(); dragDepth = 0; $("drop").classList.add("hidden");
-    if (state.current && e.dataTransfer) Array.prototype.forEach.call(e.dataTransfer.files, sendFile);
+    if (state.current && e.dataTransfer) handleFiles(e.dataTransfer.files);
   });
-  $("text").addEventListener("paste", function (e) {
+  // Colar funciona em qualquer lugar da conversa aberta (não só na caixa de texto).
+  document.addEventListener("paste", function (e) {
+    if (!state.current || !$("editor").classList.contains("hidden") || !$("settings").classList.contains("hidden")) return;
     var files = e.clipboardData && e.clipboardData.files;
-    if (files && files.length) { e.preventDefault(); Array.prototype.forEach.call(files, sendFile); }
+    if (files && files.length) { e.preventDefault(); handleFiles(files); }
   });
 
   function toHex(buf) {
@@ -922,7 +1042,30 @@
     });
   }
 
-  async function sendFile(file) {
+  /** Sobe o arquivo em pedaços (retoma se a internet falhar). Devolve { mediaId, sha256 }. */
+  async function uploadMedia(file, mime, name, onProgress) {
+    var buf = await file.arrayBuffer();
+    var sha256 = toHex(await crypto.subtle.digest("SHA-256", buf));
+    buf = null;
+    var st = await api("POST", "/api/media", { size: file.size, sha256: sha256, mime: mime, name: name });
+    var tries = 0;
+    while (!st.complete) {
+      try {
+        var part = file.slice(st.received, Math.min(st.size, st.received + CHUNK));
+        st = await api("PUT", "/api/media/" + encodeURIComponent(st.mediaId) + "?offset=" + st.received, part);
+        tries = 0;
+      } catch (e) {
+        if (e.status && e.status < 500 && e.code !== "wrong_offset") throw e;
+        if (++tries > 5) throw e;
+        await new Promise(function (r) { setTimeout(r, 2000 * tries); });
+        st = await api("GET", "/api/media/" + encodeURIComponent(st.mediaId) + "/status");
+      }
+      if (onProgress) onProgress(st.received / st.size);
+    }
+    return { mediaId: st.mediaId, sha256: sha256 };
+  }
+
+  async function sendFile(file, caption) {
     if (!state.current) return;
     if (!file.size) { toast("Arquivo vazio: " + file.name); return; }
     if (file.size > MAX_WEB_UPLOAD) { toast("Pelo computador, o máximo é 1 GB. Mande pelo celular."); return; }
@@ -931,36 +1074,20 @@
     var kind = kindOf(mime);
     var id = uuid();
     var att = { mediaId: "", kind: kind, mime: mime, name: file.name || "arquivo", size: file.size, sha256: "" };
-    var m = { id: id, conversationId: conv, authorId: state.me.id, body: "", createdAt: Date.now(), seq: null, status: "pending", attachment: att };
+    var m = { id: id, conversationId: conv, authorId: state.me.id, body: caption || "", createdAt: Date.now(), seq: null, status: "pending", attachment: att };
     (state.messages[conv] = state.messages[conv] || []).push(m);
     state.uploads[id] = 0;
     renderConvs(); if (conv === state.current) renderChat(true);
     function progress(p) { state.uploads[id] = p; if (conv === state.current) renderChat(); }
     try {
-      var buf = await file.arrayBuffer();
-      att.sha256 = toHex(await crypto.subtle.digest("SHA-256", buf));
-      buf = null;
       if (kind === "image") att.thumb = await imageThumb(file);
       var dur = await mediaDuration(file, kind);
       if (dur) att.durationMs = dur;
-      var st = await api("POST", "/api/media", { size: file.size, sha256: att.sha256, mime: mime, name: att.name });
-      var tries = 0;
-      while (!st.complete) {
-        try {
-          var part = file.slice(st.received, Math.min(st.size, st.received + CHUNK));
-          st = await api("PUT", "/api/media/" + encodeURIComponent(st.mediaId) + "?offset=" + st.received, part);
-          tries = 0;
-        } catch (e) {
-          if (e.status && e.status < 500 && e.code !== "wrong_offset") throw e;
-          if (++tries > 5) throw e;
-          await new Promise(function (r) { setTimeout(r, 2000 * tries); });
-          st = await api("GET", "/api/media/" + encodeURIComponent(st.mediaId) + "/status");
-        }
-        progress(st.received / st.size);
-      }
+      var st = await uploadMedia(file, mime, att.name, progress);
+      att.sha256 = st.sha256;
       att.mediaId = st.mediaId;
       delete state.uploads[id];
-      var frame = { type: "send", id: id, conversationId: conv, body: "", attachment: att };
+      var frame = { type: "send", id: id, conversationId: conv, body: caption || "", attachment: att };
       state.pendingSends[id] = frame;
       send(frame);
       renderChat();
@@ -971,6 +1098,415 @@
       renderChat();
     }
   }
+
+  // ---------- fotos passam pelo editor antes de enviar ----------
+  var EDITABLE = /^image\/(jpeg|png|webp|bmp)$/;
+  function handleFiles(list) {
+    var files = Array.prototype.slice.call(list);
+    var images = files.filter(function (f) { return EDITABLE.test(f.type) && f.size <= 40 * 1024 * 1024; });
+    files.filter(function (f) { return images.indexOf(f) < 0; }).forEach(function (f) { sendFile(f, ""); });
+    if (images.length) Editor.open(images, state.current);
+  }
+
+  // ---------- configurações (foto e nome) ----------
+  function renderSettings() {
+    if ($("settings").classList.contains("hidden") || !state.me) return;
+    setAvatar($("setAvatar"), state.me.name, state.me.avatarMediaId);
+    $("setNoPhoto").classList.toggle("hidden", !state.me.avatarMediaId);
+    $("setPhoto").textContent = state.me.avatarMediaId ? "Trocar foto" : "Escolher foto";
+    $("setConn").innerHTML = '<span class="dot' + (state.online ? " on" : "") + '"></span> ' + (state.online ? "online" : "sem conexão");
+    $("setHost").textContent = location.host;
+    $("setSave").disabled = !$("setName").value.trim() || $("setName").value.trim() === state.me.name;
+  }
+  function setMsg(text, ok) { $("setMsg").textContent = text || ""; $("setMsg").style.color = ok ? "var(--online)" : "var(--error)"; }
+  $("settingsBtn").onclick = function () {
+    $("settings").classList.remove("hidden");
+    $("setName").value = state.me ? state.me.name : "";
+    setMsg("");
+    renderSettings();
+  };
+  $("meAvatar").style.cursor = "pointer";
+  $("meAvatar").onclick = $("settingsBtn").onclick;
+  $("setClose").onclick = function () { $("settings").classList.add("hidden"); };
+  $("settings").onclick = function (e) { if (e.target === $("settings")) $("settings").classList.add("hidden"); };
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") $("settings").classList.add("hidden"); });
+  $("setName").oninput = renderSettings;
+  $("setName").onkeydown = function (e) { if (e.key === "Enter" && !$("setSave").disabled) $("setSave").onclick(); };
+  $("setSave").onclick = async function () {
+    var name = $("setName").value.trim();
+    $("setSave").disabled = true;
+    setMsg("Salvando…", true);
+    try {
+      await request({ type: "update_profile", name: name });
+      setMsg("Nome salvo ✔", true);
+    } catch (e) { setMsg(e.message); }
+    renderSettings();
+  };
+  $("setPhoto").onclick = function () { $("setPhotoInput").click(); };
+  $("setAvatar").onclick = $("setPhoto").onclick;
+  $("setNoPhoto").onclick = async function () {
+    setMsg("Tirando a foto…", true);
+    try { await request({ type: "update_profile", avatarMediaId: "" }); setMsg("Foto removida ✔", true); }
+    catch (e) { setMsg(e.message); }
+  };
+  // Foto de perfil: quadrado do meio da foto, 512×512, JPEG (igual ao celular).
+  function squareJpeg(file) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () {
+        var side = Math.min(img.width, img.height), out = Math.min(512, side);
+        var c = document.createElement("canvas"); c.width = out; c.height = out;
+        c.getContext("2d").drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, out, out);
+        URL.revokeObjectURL(url);
+        c.toBlob(function (b) { b ? resolve(b) : reject(new Error("Não consegui preparar a foto.")); }, "image/jpeg", 0.88);
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error("Não consegui abrir essa foto. Escolha outra.")); };
+      img.src = url;
+    });
+  }
+  $("setPhotoInput").onchange = async function () {
+    var f = $("setPhotoInput").files[0];
+    $("setPhotoInput").value = "";
+    if (!f) return;
+    setMsg("Enviando a foto…", true);
+    try {
+      var blob = await squareJpeg(f);
+      var up = await uploadMedia(blob, "image/jpeg", "perfil.jpg");
+      await request({ type: "update_profile", avatarMediaId: up.mediaId });
+      setMsg("Foto trocada ✔", true);
+    } catch (e) { setMsg(e.message); }
+  };
+  $("setLogout").onclick = function () { $("logout").onclick(); };
+
+  // ---------- editor de foto (recortar, girar, desenhar, texto, emoji) ----------
+  var Editor = (function () {
+    var COLORS = ["#ffffff", "#000000", "#e53935", "#fb8c00", "#fdd835", "#43a047", "#1e88e5", "#8e24aa", "#ec407a"];
+    var EMOJIS = "😀 😂 🥰 😍 😎 😢 😮 😡 👍 👎 👏 🙏 💪 🎉 ❤️ 💔 🔥 ⭐ ✅ ❌ ❓ ❗ 👉 👈 👆 👇 ➡️ ⬅️ ⬆️ ⬇️ ⭕ 💯 🎂 🎁 ☀️ 🌧️ 🐶 🐱 🌹 🍕 ⚽ 🚗 🏠 📍 ⏰ 💰".split(" ");
+    var MAX_SIDE = 4096;
+    var canvas = $("edCanvas"), ctx = canvas.getContext("2d");
+    var queue = [], current = null, convId = null;
+    var tool = null, color = "#e53935", undo = [], dirty = false;
+    var items = [];   // textos e emojis ainda soltos (podem ser arrastados)
+    var crop = null;  // { x, y, w, h } em pixels da foto
+
+    function snapshot() {
+      var c = document.createElement("canvas"); c.width = canvas.width; c.height = canvas.height;
+      c.getContext("2d").drawImage(canvas, 0, 0);
+      undo.push(c);
+      if (undo.length > 20) undo.shift();
+      $("edUndo").disabled = false;
+    }
+    function restore() {
+      var c = undo.pop();
+      if (!c) return;
+      canvas.width = c.width; canvas.height = c.height;
+      ctx.drawImage(c, 0, 0);
+      $("edUndo").disabled = !undo.length;
+      if (crop) showCrop();
+    }
+    // Quantos pixels da foto há em 1 pixel da tela.
+    function factor() { var r = canvas.getBoundingClientRect(); return canvas.width / r.width; }
+    function toImage(clientX, clientY) {
+      var r = canvas.getBoundingClientRect(), k = canvas.width / r.width;
+      return { x: (clientX - r.left) * k, y: (clientY - r.top) * k };
+    }
+
+    function open(files, conversation) {
+      queue = queue.concat(files);
+      convId = conversation;
+      if (!current) next();
+    }
+    function next() {
+      current = queue.shift() || null;
+      if (!current) { close(); return; }
+      var url = URL.createObjectURL(current);
+      var img = new Image();
+      img.onload = function () {
+        var k = Math.min(1, MAX_SIDE / Math.max(img.width, img.height));
+        canvas.width = Math.round(img.width * k); canvas.height = Math.round(img.height * k);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(url);
+        undo = []; dirty = false; items.forEach(function (it) { it.el.remove(); }); items = []; crop = null;
+        $("edUndo").disabled = true;
+        $("edCaption").value = "";
+        $("edTitle").textContent = (current.name || "Foto") + (queue.length ? " · mais " + queue.length : "");
+        $("editor").classList.remove("hidden");
+        setTool(null);
+        $("edCaption").focus();
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); sendFile(current, ""); next(); };
+      img.src = url;
+    }
+    function close() {
+      $("editor").classList.add("hidden");
+      items.forEach(function (it) { it.el.remove(); }); items = [];
+      hideCrop(); current = null; queue = []; undo = [];
+    }
+
+    // ----- ferramentas -----
+    function setTool(t) {
+      if (tool === "crop" && t !== "crop") hideCrop();
+      if (t !== "text" && t !== "emoji") bakeItems();
+      tool = (tool === t && t !== null) ? null : t;
+      Array.prototype.forEach.call(document.querySelectorAll("#editor [data-tool]"), function (b) {
+        b.classList.toggle("on", b.getAttribute("data-tool") === tool);
+      });
+      canvas.classList.toggle("draw", tool === "draw");
+      var sub = $("edSub");
+      sub.innerHTML = "";
+      if (tool === "draw" || tool === "text") {
+        COLORS.forEach(function (c) {
+          var b = document.createElement("button");
+          b.className = "swatch" + (c === color ? " on" : ""); b.style.background = c; b.title = "Cor";
+          b.onclick = function () {
+            color = c;
+            Array.prototype.forEach.call(sub.querySelectorAll(".swatch"), function (x) { x.classList.toggle("on", x === b); });
+            var sel = items.filter(function (it) { return it.el === document.activeElement || it.selected; });
+            sel.forEach(function (it) { it.color = c; it.el.style.color = c; });
+          };
+          sub.appendChild(b);
+        });
+        var h = document.createElement("span"); h.className = "hint";
+        h.textContent = tool === "draw" ? "Arraste na foto para desenhar." : "Clique na foto para escrever. Arraste o texto para mudar de lugar; rodinha do mouse muda o tamanho.";
+        sub.appendChild(h);
+      } else if (tool === "emoji") {
+        var box = document.createElement("div"); box.id = "edEmojis";
+        EMOJIS.forEach(function (em) {
+          var b = document.createElement("button"); b.textContent = em;
+          b.onclick = function () { addItem(em, true); };
+          box.appendChild(b);
+        });
+        sub.appendChild(box);
+      } else if (tool === "crop") {
+        sub.innerHTML = '<span class="hint">Arraste os cantos para escolher a parte da foto.</span>';
+        var ok = document.createElement("button"); ok.className = "tool on"; ok.textContent = "✓ Aplicar recorte";
+        ok.onclick = applyCrop;
+        sub.appendChild(ok);
+        showCrop(true);
+      } else {
+        sub.innerHTML = '<span class="hint">Use as ferramentas acima para editar, ou envie assim mesmo.</span>';
+      }
+    }
+    Array.prototype.forEach.call(document.querySelectorAll("#editor [data-tool]"), function (b) {
+      b.onclick = function () { setTool(b.getAttribute("data-tool")); };
+    });
+
+    // Girar 90° para a direita.
+    $("edRotate").onclick = function () {
+      bakeItems(); hideCrop(); if (tool === "crop") setTool(null);
+      snapshot();
+      var c = document.createElement("canvas"); c.width = canvas.height; c.height = canvas.width;
+      var x = c.getContext("2d");
+      x.translate(c.width, 0); x.rotate(Math.PI / 2); x.drawImage(canvas, 0, 0);
+      canvas.width = c.width; canvas.height = c.height; ctx.drawImage(c, 0, 0);
+      dirty = true;
+    };
+    $("edUndo").onclick = function () { if (items.length) { var it = items.pop(); it.el.remove(); return; } restore(); };
+
+    // ----- desenhar -----
+    var drawing = null;
+    canvas.addEventListener("pointerdown", function (e) {
+      if (tool === "draw") {
+        e.preventDefault();
+        canvas.setPointerCapture(e.pointerId);
+        snapshot();
+        var p = toImage(e.clientX, e.clientY);
+        drawing = p;
+        ctx.strokeStyle = color; ctx.fillStyle = color;
+        ctx.lineWidth = Math.max(3, Math.round(Math.max(canvas.width, canvas.height) / 180));
+        ctx.lineCap = "round"; ctx.lineJoin = "round";
+        ctx.beginPath(); ctx.arc(p.x, p.y, ctx.lineWidth / 2, 0, Math.PI * 2); ctx.fill();
+        dirty = true;
+      } else if (tool === "text") {
+        e.preventDefault(); // não deixa o clique tirar o cursor do texto novo
+        var r = canvas.getBoundingClientRect();
+        addItem("", false, e.clientX - r.left, e.clientY - r.top);
+      }
+    });
+    canvas.addEventListener("pointermove", function (e) {
+      if (!drawing) return;
+      var p = toImage(e.clientX, e.clientY);
+      ctx.beginPath(); ctx.moveTo(drawing.x, drawing.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+      drawing = p;
+    });
+    function stopDraw() { drawing = null; }
+    canvas.addEventListener("pointerup", stopDraw);
+    canvas.addEventListener("pointercancel", stopDraw);
+
+    // ----- textos e emojis (soltos até enviar, para poder arrastar) -----
+    function addItem(text, isEmoji, sx, sy) {
+      var stage = $("edStage"), cr = canvas.getBoundingClientRect(), sr = stage.getBoundingClientRect();
+      var el = document.createElement("div");
+      el.className = "ed-item";
+      el.textContent = text;
+      var it = { el: el, emoji: isEmoji, color: color, size: isEmoji ? 64 : 34,
+                 x: sx != null ? sx : cr.width / 2, y: sy != null ? sy : cr.height / 2 };
+      el.style.color = isEmoji ? "#000" : color;
+      el.style.fontSize = it.size + "px";
+      if (!isEmoji) {
+        el.contentEditable = "true";
+        el.setAttribute("data-placeholder", "Escreva…");
+      }
+      function place() {
+        var cr2 = canvas.getBoundingClientRect(), sr2 = stage.getBoundingClientRect();
+        el.style.left = (cr2.left - sr2.left + it.x) + "px";
+        el.style.top = (cr2.top - sr2.top + it.y) + "px";
+        el.style.fontSize = it.size + "px";
+      }
+      it.place = place;
+      place();
+      stage.appendChild(el);
+      items.push(it);
+      dirty = true;
+      // Arrastar
+      var start = null;
+      el.addEventListener("pointerdown", function (e) {
+        items.forEach(function (o) { o.selected = (o === it); });
+        start = { x: e.clientX, y: e.clientY, ix: it.x, iy: it.y, moved: false };
+        el.setPointerCapture(e.pointerId);
+        e.stopPropagation();
+      });
+      el.addEventListener("pointermove", function (e) {
+        if (!start) return;
+        var dx = e.clientX - start.x, dy = e.clientY - start.y;
+        if (Math.abs(dx) + Math.abs(dy) > 3) start.moved = true;
+        if (!start.moved) return;
+        it.x = start.ix + dx; it.y = start.iy + dy; place();
+        e.preventDefault();
+      });
+      el.addEventListener("pointerup", function () { if (start && !start.moved && !isEmoji) el.focus(); start = null; });
+      // Rodinha: tamanho
+      el.addEventListener("wheel", function (e) {
+        e.preventDefault();
+        it.size = Math.max(14, Math.min(220, it.size * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
+        place();
+      }, { passive: false });
+      el.addEventListener("blur", function () {
+        if (!isEmoji && !el.textContent.trim()) { el.remove(); items = items.filter(function (o) { return o !== it; }); }
+      });
+      if (!isEmoji) { el.focus(); setTimeout(function () { el.focus(); }, 0); }
+      return it;
+    }
+    window.addEventListener("resize", function () { items.forEach(function (it) { it.place(); }); if (crop) showCrop(); });
+
+    // Grava textos e emojis na foto.
+    function bakeItems() {
+      if (!items.length) return;
+      var live = items.filter(function (it) { return it.el.textContent.trim(); });
+      if (live.length) snapshot();
+      var k = factor();
+      live.forEach(function (it) {
+        var size = it.size * k;
+        ctx.save();
+        ctx.font = "bold " + size + "px system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        var lines = it.el.innerText.replace(/\n$/, "").split("\n");
+        var lh = size * 1.15, top = it.y * k - (lines.length - 1) * lh / 2;
+        lines.forEach(function (line, i) {
+          var y = top + i * lh;
+          if (!it.emoji) {
+            ctx.lineWidth = Math.max(2, size / 8); ctx.strokeStyle = it.color === "#000000" ? "#ffffff" : "#000000";
+            ctx.lineJoin = "round"; ctx.strokeText(line, it.x * k, y);
+            ctx.fillStyle = it.color;
+          } else ctx.fillStyle = "#000";
+          ctx.fillText(line, it.x * k, y);
+        });
+        ctx.restore();
+      });
+      items.forEach(function (it) { it.el.remove(); });
+      items = [];
+    }
+
+    // ----- recortar -----
+    var cropEl = null;
+    function showCrop(reset) {
+      if (reset || !crop) crop = { x: 0, y: 0, w: canvas.width, h: canvas.height };
+      if (!cropEl) {
+        cropEl = document.createElement("div"); cropEl.id = "edCrop";
+        cropEl.innerHTML = '<div class="grid"></div><div class="h nw"></div><div class="h ne"></div><div class="h sw"></div><div class="h se"></div>';
+        $("edStage").appendChild(cropEl);
+        var drag = null;
+        cropEl.addEventListener("pointerdown", function (e) {
+          e.preventDefault(); e.stopPropagation();
+          cropEl.setPointerCapture(e.pointerId);
+          var h = e.target.classList.contains("h") ? e.target.className.split(" ")[1] : "move";
+          drag = { h: h, p: toImage(e.clientX, e.clientY), c: Object.assign({}, crop) };
+        });
+        cropEl.addEventListener("pointermove", function (e) {
+          if (!drag) return;
+          var p = toImage(e.clientX, e.clientY), dx = p.x - drag.p.x, dy = p.y - drag.p.y, c = drag.c, n = Object.assign({}, c);
+          var min = Math.max(20, Math.min(canvas.width, canvas.height) * 0.05);
+          if (drag.h === "move") {
+            n.x = Math.max(0, Math.min(canvas.width - c.w, c.x + dx));
+            n.y = Math.max(0, Math.min(canvas.height - c.h, c.y + dy));
+          } else {
+            var left = c.x, top = c.y, right = c.x + c.w, bottom = c.y + c.h;
+            if (drag.h.indexOf("w") >= 0) left = Math.max(0, Math.min(right - min, left + dx));
+            if (drag.h.indexOf("e") >= 0) right = Math.min(canvas.width, Math.max(left + min, right + dx));
+            if (drag.h.indexOf("n") >= 0) top = Math.max(0, Math.min(bottom - min, top + dy));
+            if (drag.h.indexOf("s") >= 0) bottom = Math.min(canvas.height, Math.max(top + min, bottom + dy));
+            n = { x: left, y: top, w: right - left, h: bottom - top };
+          }
+          crop = n; placeCrop();
+        });
+        cropEl.addEventListener("pointerup", function () { drag = null; });
+      }
+      cropEl.classList.remove("hidden");
+      placeCrop();
+    }
+    function placeCrop() {
+      var cr = canvas.getBoundingClientRect(), sr = $("edStage").getBoundingClientRect(), k = cr.width / canvas.width;
+      cropEl.style.left = (cr.left - sr.left + crop.x * k) + "px";
+      cropEl.style.top = (cr.top - sr.top + crop.y * k) + "px";
+      cropEl.style.width = (crop.w * k) + "px";
+      cropEl.style.height = (crop.h * k) + "px";
+    }
+    function hideCrop() { if (cropEl) cropEl.classList.add("hidden"); }
+    function applyCrop() {
+      var c = { x: Math.round(crop.x), y: Math.round(crop.y), w: Math.round(crop.w), h: Math.round(crop.h) };
+      if (c.w < canvas.width || c.h < canvas.height) {
+        snapshot();
+        var tmp = document.createElement("canvas"); tmp.width = c.w; tmp.height = c.h;
+        tmp.getContext("2d").drawImage(canvas, c.x, c.y, c.w, c.h, 0, 0, c.w, c.h);
+        canvas.width = c.w; canvas.height = c.h; ctx.drawImage(tmp, 0, 0);
+        dirty = true;
+      }
+      crop = null;
+      setTool(null);
+    }
+
+    // ----- enviar / cancelar -----
+    function finish() {
+      if (tool === "crop") applyCrop();
+      bakeItems();
+      var file = current, caption = $("edCaption").value.trim(), conv = convId;
+      if (!dirty) { sendTo(conv, file, caption); next(); return; }
+      var png = file.type === "image/png";
+      canvas.toBlob(function (blob) {
+        var base = (file.name || "foto").replace(/\.[^.]+$/, "");
+        var edited = new File([blob], base + (png ? ".png" : ".jpg"), { type: png ? "image/png" : "image/jpeg" });
+        sendTo(conv, edited, caption);
+        next();
+      }, png ? "image/png" : "image/jpeg", 0.92);
+    }
+    function sendTo(conv, file, caption) {
+      var keep = state.current;
+      state.current = conv;
+      sendFile(file, caption);
+      state.current = keep;
+    }
+    $("edSend").onclick = finish;
+    $("edCaption").addEventListener("keydown", function (e) { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); finish(); } });
+    $("edCancel").onclick = function () { items.forEach(function (it) { it.el.remove(); }); items = []; hideCrop(); next(); };
+    document.addEventListener("keydown", function (e) {
+      if ($("editor").classList.contains("hidden")) return;
+      if (e.key === "Escape" && document.activeElement && document.activeElement.classList.contains("ed-item")) { document.activeElement.blur(); return; }
+      if (e.key === "Escape") $("edCancel").onclick();
+      if ((e.ctrlKey || e.metaKey) && e.key === "z" && !(document.activeElement && document.activeElement.isContentEditable)) { e.preventDefault(); $("edUndo").onclick(); }
+    });
+    return { open: open };
+  })();
 
   // ---------- sair ----------
   $("logout").onclick = async function () {
