@@ -108,8 +108,22 @@
   #viewer .bar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; color: #fff; }
   #viewer .bar .grow { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #viewer .bar a, #viewer .bar button { color: #fff; background: rgba(255,255,255,.12); border: 0; border-radius: 18px; padding: 8px 16px; text-decoration: none; font-weight: 600; }
-  #viewer .stage { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; padding: 0 16px 16px; }
-  #viewer img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  #viewer .stage { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; padding: 0 16px 16px;
+                   overflow: hidden; position: relative; touch-action: none; cursor: zoom-in; }
+  #viewer .stage.zoomed { cursor: grab; }
+  #viewer .stage.dragging { cursor: grabbing; }
+  #viewer .stage img, #viewer .stage video { max-width: 100%; max-height: 100%; object-fit: contain; transform-origin: center center;
+                   user-select: none; -webkit-user-drag: none; will-change: transform; }
+  #viewer .zoom { display: flex; align-items: center; gap: 4px; background: rgba(255,255,255,.12); border-radius: 18px; padding: 2px; }
+  #viewer .zoom button { background: transparent !important; padding: 6px 12px !important; font-size: 18px; line-height: 1; }
+  #viewer .zoom span { min-width: 52px; text-align: center; font-size: 14px; cursor: pointer; }
+  #viewer .vbar { display: flex; align-items: center; gap: 12px; padding: 8px 16px 14px; color: #fff; }
+  #viewer .vbar button { color: #fff; background: rgba(255,255,255,.12); border: 0; border-radius: 50%; width: 42px; height: 42px; font-size: 18px; }
+  #viewer .vbar input[type=range] { flex: 1; accent-color: var(--primary); }
+  #viewer .vbar .t { font-size: 13px; min-width: 96px; text-align: center; font-variant-numeric: tabular-nums; }
+  #viewer .tip { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,.7); font-size: 13px;
+                 background: rgba(0,0,0,.4); padding: 4px 12px; border-radius: 12px; pointer-events: none; }
+  .topbar .avatar { box-shadow: 0 0 0 2px rgba(255,255,255,.75); }
 
   #toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: #333; color: #fff; padding: 10px 18px; border-radius: 20px;
            font-size: 14px; z-index: 20; max-width: calc(100% - 32px); }
@@ -193,10 +207,25 @@
 <div id="viewer" class="hidden">
   <div class="bar">
     <span class="grow" id="viewerName"></span>
+    <div class="zoom">
+      <button id="zoomOut" title="Diminuir (−)">−</button>
+      <span id="zoomLabel" title="Voltar ao tamanho normal">100%</span>
+      <button id="zoomIn" title="Aumentar (+)">+</button>
+    </div>
     <a id="viewerSave" href="#">⬇ Salvar</a>
     <button id="viewerClose">✕ Fechar</button>
   </div>
-  <div class="stage"><img id="viewerImg" alt=""></div>
+  <div class="stage" id="stage">
+    <img id="viewerImg" alt="" draggable="false">
+    <video id="viewerVideo" class="hidden" playsinline></video>
+    <div class="tip" id="zoomTip">Rodinha do mouse ou dois cliques para aumentar · arraste para mover</div>
+  </div>
+  <div class="vbar hidden" id="vbar">
+    <button id="vPlay" title="Tocar / pausar (espaço)">▶</button>
+    <span class="t" id="vTime">0:00 / 0:00</span>
+    <input type="range" id="vSeek" min="0" max="1000" value="0">
+    <button id="vMute" title="Som">🔊</button>
+  </div>
 </div>
 <div id="toast" class="hidden"></div>
 
@@ -610,7 +639,8 @@
     if (a.kind === "video") {
       var poster = a.thumb ? ' poster="data:image/jpeg;base64,' + esc(a.thumb) + '"' : "";
       return '<video class="media" controls preload="none"' + poster + ' src="' + url + '"></video>' +
-        '<div class="media-actions"><a href="' + mediaUrl(a.mediaId, true) + '">⬇ Salvar</a><span style="color:var(--text-sec)">🎥 ' +
+        '<div class="media-actions"><a href="#" data-zoomvideo="' + esc(a.mediaId) + '" data-name="' + esc(a.name) + '">🔍 Ampliar</a>' +
+        '<a href="' + mediaUrl(a.mediaId, true) + '">⬇ Salvar</a><span style="color:var(--text-sec)">🎥 ' +
         esc(extOf(a.name, a.mime)) + (a.durationMs ? " · " + durLabel(a.durationMs) : "") + " · " + sizeLabel(a.size) + "</span></div>";
     }
     if (a.kind === "audio") {
@@ -645,23 +675,175 @@
     if (!list.length) html.push('<div class="empty">Nenhuma mensagem ainda. Diga um oi! 👋</div>');
     box.innerHTML = html.join("");
     Array.prototype.forEach.call(box.querySelectorAll("img[data-view]"), function (img) {
-      img.onclick = function () { openViewer(img.getAttribute("data-view"), img.getAttribute("data-name")); };
+      img.onclick = function () { openViewer(img.getAttribute("data-view"), img.getAttribute("data-name"), false); };
       img.onload = function () { if (nearEnd || scrollToEnd) box.scrollTop = box.scrollHeight; };
+    });
+    Array.prototype.forEach.call(box.querySelectorAll("a[data-zoomvideo]"), function (a) {
+      a.onclick = function (e) {
+        e.preventDefault();
+        // Pausa o vídeo da conversa e continua do mesmo ponto na tela cheia.
+        var inline = a.closest(".msg").querySelector("video.media");
+        var at = inline ? inline.currentTime : 0;
+        if (inline) inline.pause();
+        openViewer(a.getAttribute("data-zoomvideo"), a.getAttribute("data-name"), true, at);
+      };
     });
     if (nearEnd || scrollToEnd) box.scrollTop = box.scrollHeight;
   }
 
   // ---------- foto em tela cheia ----------
-  function openViewer(mediaId, name) {
-    $("viewerImg").src = mediaUrl(mediaId);
-    $("viewerName").textContent = name || "Foto";
+  // Zoom: rodinha do mouse (no ponto do mouse), dois cliques, botões + e −, arrastar para mover,
+  // e dois dedos em tela de toque. Vale para foto e vídeo.
+  var zoom = { s: 1, x: 0, y: 0, el: null };
+  var MAX_ZOOM = 8;
+  function zoomTarget() { return zoom.el; }
+  function clampPan() {
+    var el = zoomTarget(), st = $("stage");
+    if (!el) return;
+    var w = el.offsetWidth * zoom.s, h = el.offsetHeight * zoom.s;
+    var mx = Math.max(0, (w - st.clientWidth) / 2), my = Math.max(0, (h - st.clientHeight) / 2);
+    zoom.x = Math.max(-mx, Math.min(mx, zoom.x));
+    zoom.y = Math.max(-my, Math.min(my, zoom.y));
+  }
+  function applyZoom() {
+    if (zoom.s <= 1.001) { zoom.s = 1; zoom.x = 0; zoom.y = 0; }
+    clampPan();
+    var el = zoomTarget();
+    if (el) el.style.transform = "translate(" + zoom.x + "px," + zoom.y + "px) scale(" + zoom.s + ")";
+    $("zoomLabel").textContent = Math.round(zoom.s * 100) + "%";
+    $("stage").classList.toggle("zoomed", zoom.s > 1);
+  }
+  // Muda o zoom mantendo parado o ponto (cx, cy) da tela (coordenadas da página).
+  function zoomAt(newScale, cx, cy) {
+    var st = $("stage").getBoundingClientRect();
+    var px = cx - (st.left + st.width / 2), py = cy - (st.top + st.height / 2);
+    var s2 = Math.max(1, Math.min(MAX_ZOOM, newScale));
+    var k = s2 / zoom.s;
+    zoom.x = px - (px - zoom.x) * k;
+    zoom.y = py - (py - zoom.y) * k;
+    zoom.s = s2;
+    applyZoom();
+    $("zoomTip").classList.add("hidden");
+  }
+  function zoomCenter(factor) {
+    var st = $("stage").getBoundingClientRect();
+    zoomAt(zoom.s * factor, st.left + st.width / 2, st.top + st.height / 2);
+  }
+  function resetZoom() { zoom.s = 1; zoom.x = 0; zoom.y = 0; applyZoom(); }
+
+  $("zoomIn").onclick = function () { zoomCenter(1.5); };
+  $("zoomOut").onclick = function () { zoomCenter(1 / 1.5); };
+  $("zoomLabel").onclick = resetZoom;
+  $("stage").addEventListener("wheel", function (e) {
+    if ($("viewer").classList.contains("hidden")) return;
+    e.preventDefault();
+    zoomAt(zoom.s * Math.pow(1.0015, -e.deltaY), e.clientX, e.clientY);
+  }, { passive: false });
+  $("stage").addEventListener("dblclick", function (e) {
+    if (e.target === $("stage")) return;
+    if (zoom.s > 1) resetZoom(); else zoomAt(2.5, e.clientX, e.clientY);
+  });
+
+  // Arrastar (mouse ou um dedo) e pinça (dois dedos).
+  var pointers = {}, pinch = null, drag = null, moved = false;
+  $("stage").addEventListener("pointerdown", function (e) {
+    if (e.target === $("stage") && zoom.s === 1) return; // clique no fundo: fecha (abaixo)
+    pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+    var ids = Object.keys(pointers);
+    moved = false;
+    if (ids.length === 2) {
+      var a = pointers[ids[0]], b = pointers[ids[1]];
+      pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), s: zoom.s };
+      drag = null;
+    } else if (ids.length === 1) {
+      drag = { x: e.clientX, y: e.clientY, ox: zoom.x, oy: zoom.y };
+    }
+  });
+  window.addEventListener("pointermove", function (e) {
+    if (!pointers[e.pointerId]) return;
+    pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+    var ids = Object.keys(pointers);
+    if (pinch && ids.length === 2) {
+      var a = pointers[ids[0]], b = pointers[ids[1]];
+      zoomAt(pinch.s * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d, (a.x + b.x) / 2, (a.y + b.y) / 2);
+      moved = true;
+    } else if (drag && zoom.s > 1) {
+      if (Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) > 3) moved = true;
+      zoom.x = drag.ox + e.clientX - drag.x;
+      zoom.y = drag.oy + e.clientY - drag.y;
+      $("stage").classList.add("dragging");
+      applyZoom();
+    }
+  });
+  function endPointer(e) {
+    delete pointers[e.pointerId];
+    if (Object.keys(pointers).length < 2) pinch = null;
+    if (!Object.keys(pointers).length) { drag = null; $("stage").classList.remove("dragging"); }
+  }
+  window.addEventListener("pointerup", endPointer);
+  window.addEventListener("pointercancel", endPointer);
+
+  // ---------- vídeo em tela cheia (com controles próprios, para o zoom não aumentar os botões) ----------
+  var video = $("viewerVideo");
+  function fmt(t) { return isFinite(t) ? durLabel(t * 1000) : "0:00"; }
+  function syncVideoBar() {
+    $("vPlay").textContent = video.paused ? "▶" : "⏸";
+    $("vTime").textContent = fmt(video.currentTime) + " / " + fmt(video.duration);
+    if (!seeking && isFinite(video.duration) && video.duration > 0) $("vSeek").value = Math.round(video.currentTime / video.duration * 1000);
+    $("vMute").textContent = video.muted ? "🔇" : "🔊";
+  }
+  var seeking = false;
+  ["timeupdate", "play", "pause", "loadedmetadata", "volumechange", "ended"].forEach(function (ev) { video.addEventListener(ev, syncVideoBar); });
+  $("vPlay").onclick = function () { if (video.paused) video.play(); else video.pause(); };
+  $("vMute").onclick = function () { video.muted = !video.muted; };
+  $("vSeek").addEventListener("input", function () {
+    seeking = true;
+    if (isFinite(video.duration)) video.currentTime = $("vSeek").value / 1000 * video.duration;
+  });
+  $("vSeek").addEventListener("change", function () { seeking = false; });
+  // Um clique no vídeo (sem arrastar) toca ou pausa.
+  video.addEventListener("click", function () { if (!moved) $("vPlay").onclick(); });
+
+  function openViewer(mediaId, name, isVideo, startAt) {
+    var img = $("viewerImg");
+    img.classList.toggle("hidden", !!isVideo);
+    video.classList.toggle("hidden", !isVideo);
+    $("vbar").classList.toggle("hidden", !isVideo);
+    if (isVideo) {
+      img.removeAttribute("src");
+      video.src = mediaUrl(mediaId);
+      if (startAt) video.addEventListener("loadedmetadata", function f() { video.currentTime = startAt; video.removeEventListener("loadedmetadata", f); });
+      video.play().catch(function () { /* o navegador pode pedir um clique antes */ });
+      zoom.el = video;
+    } else {
+      img.src = mediaUrl(mediaId);
+      zoom.el = img;
+    }
+    $("viewerName").textContent = name || (isVideo ? "Vídeo" : "Foto");
     $("viewerSave").href = mediaUrl(mediaId, true);
+    $("zoomTip").classList.remove("hidden");
+    resetZoom();
     $("viewer").classList.remove("hidden");
   }
-  function closeViewer() { $("viewer").classList.add("hidden"); $("viewerImg").removeAttribute("src"); }
+  function closeViewer() {
+    $("viewer").classList.add("hidden");
+    $("viewerImg").removeAttribute("src");
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    zoom.el = null;
+  }
   $("viewerClose").onclick = closeViewer;
-  $("viewer").onclick = function (e) { if (e.target.classList.contains("stage")) closeViewer(); };
-  document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeViewer(); });
+  $("stage").addEventListener("click", function (e) { if (e.target === $("stage") && zoom.s === 1) closeViewer(); });
+  document.addEventListener("keydown", function (e) {
+    if ($("viewer").classList.contains("hidden")) return;
+    if (e.key === "Escape") closeViewer();
+    else if (e.key === "+" || e.key === "=") zoomCenter(1.5);
+    else if (e.key === "-") zoomCenter(1 / 1.5);
+    else if (e.key === "0") resetZoom();
+    else if (e.key === " " && !video.classList.contains("hidden")) { e.preventDefault(); $("vPlay").onclick(); }
+  });
+  window.addEventListener("resize", function () { if (zoom.el) applyZoom(); });
 
   // ---------- escrever ----------
   function sendText() {
