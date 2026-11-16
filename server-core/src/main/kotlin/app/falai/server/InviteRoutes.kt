@@ -134,14 +134,14 @@ internal fun invitePage(
 <meta property="og:description" content="O mensageiro da família. Toque para entrar.">
 <title>Convite para o Falaí</title>
 <style>
- body{margin:0;font-family:system-ui,-apple-system,Roboto,sans-serif;background:#F6EFE9;color:#2B2522}
+ body{margin:0;font-family:system-ui,-apple-system,Roboto,sans-serif;background:#ECF3F3;color:#1F2A2C}
  main{max-width:480px;margin:0 auto;padding:28px 18px 40px}
- h1{font-size:24px;line-height:1.25;margin:0 0 4px;color:#C8553D}
+ h1{font-size:24px;line-height:1.25;margin:0 0 4px;color:#136F7A}
  .sub{margin:0 0 20px;color:#6E625C}
  .step{display:flex;gap:12px;background:#fff;border-radius:14px;padding:16px;margin:12px 0;box-shadow:0 1px 3px rgba(0,0,0,.08)}
- .n{flex:none;width:28px;height:28px;border-radius:50%;background:#C8553D;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700}
- .btn{display:block;box-sizing:border-box;width:100%;margin:12px 0 6px;padding:14px;border-radius:12px;background:#C8553D;color:#fff;text-align:center;text-decoration:none;font-weight:600;font-size:17px}
- .btn.outline{background:#fff;color:#C8553D;border:2px solid #C8553D}
+ .n{flex:none;width:28px;height:28px;border-radius:50%;background:#136F7A;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700}
+ .btn{display:block;box-sizing:border-box;width:100%;margin:12px 0 6px;padding:14px;border-radius:12px;background:#136F7A;color:#fff;text-align:center;text-decoration:none;font-weight:600;font-size:17px}
+ .btn.outline{background:#fff;color:#136F7A;border:2px solid #136F7A}
  .small{display:block;font-size:13px;color:#6E625C}
  .code{margin-top:22px;font-size:14px;color:#6E625C;text-align:center}
 </style></head>
