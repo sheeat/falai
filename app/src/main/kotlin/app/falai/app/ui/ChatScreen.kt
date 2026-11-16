@@ -252,6 +252,10 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
     }
 
     Box(Modifier.fillMaxSize()) {
+    val calls = (LocalContext.current.applicationContext as app.falai.app.FalaiApp).calls
+    val callUi by calls.ui.collectAsState()
+    val ongoingCall = callUi.byConversation[conversationId]?.takeIf { !it.ended }
+    val askCall = app.falai.app.call.rememberCallPermissions()
     CompositionLocalProvider(
         LocalOpenMedia provides { f, m -> viewing = f to m },
         LocalMessageLongPress provides { m -> actionsFor = m },
@@ -265,12 +269,35 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
             BackButton(onClick = onBack)
             Avatar(summary?.displayName ?: "?", size = 38.dp, client = client, mediaId = summary?.avatarMediaId)
             Spacer(Modifier.width(10.dp))
-            Column {
+            Column(Modifier.weight(1f)) {
                 Text(
                     summary?.displayName ?: "Conversa", color = Color.White, fontWeight = FontWeight.SemiBold,
                     fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
                 ConnectionBadge(state)
+            }
+            // Chamadas: voz e vídeo.
+            val online = state == app.falai.client.ConnectionState.ONLINE
+            val callBusy = ongoingCall != null
+            TextButton(enabled = online && !callBusy, onClick = { askCall(false) { calls.start(conversationId, false) } }) {
+                Text("📞", fontSize = 22.sp, color = Color.White.copy(alpha = if (online && !callBusy) 1f else 0.4f))
+            }
+            TextButton(enabled = online && !callBusy, onClick = { askCall(true) { v -> calls.start(conversationId, v) } }) {
+                Text("🎥", fontSize = 22.sp, color = Color.White.copy(alpha = if (online && !callBusy) 1f else 0.4f))
+            }
+        }
+        // Chamada em andamento nesta conversa (ex.: grupo) e eu fora dela: botão para entrar.
+        val call = ongoingCall
+        if (call != null && callUi.active?.conversationId != conversationId && call.participants.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxWidth().background(FalaiColors.Online).clickable { askCall(false) { calls.join(conversationId, false) } }
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "📞  Chamada em andamento (${call.participants.size}) · toque para entrar",
+                    color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 15.sp,
+                )
             }
         }
 
@@ -520,7 +547,7 @@ private fun AttachmentView(client: FalaiClient, m: LocalMessage) {
                     .width(260.dp)
                     .aspectRatio(ratio)
                     .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFF3A3330))
+                    .background(Color(0xFF2C3638))
                     .combinedClickable(onLongClick = { longPress(m) }) { if (f != null) open(f) else download(true) },
                 contentAlignment = Alignment.Center,
             ) {

@@ -184,6 +184,11 @@ fun SettingsScreen(client: FalaiClient, onBack: () -> Unit, onInvite: () -> Unit
                 )
             }
 
+            // ---- Chamadas ----
+            HorizontalDivider(color = FalaiColors.Divider)
+            Text("Chamadas", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+            CallsSettings(client, acc.isAdmin)
+
             // ---- Computador ----
             HorizontalDivider(color = FalaiColors.Divider)
             Text("Computador", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
@@ -216,5 +221,91 @@ private fun InfoLine(label: String, value: String?, content: (@Composable () -> 
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(label, color = FalaiColors.TextSec, fontSize = 14.sp, modifier = Modifier.width(150.dp))
         if (content != null) content() else Text(value ?: "", fontSize = 14.sp)
+    }
+}
+
+/** Tocar com o app fechado (e, para o administrador, o "ajudante de chamadas" da Cloudflare). */
+@Composable
+private fun CallsSettings(client: FalaiClient, isAdmin: Boolean) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var keep by remember { mutableStateOf(app.falai.app.call.KeepConnected.isOn(context)) }
+    var batteryOk by remember { mutableStateOf(app.falai.app.call.KeepConnected.batteryOk(context)) }
+    // Volta da pergunta do Android: confere de novo.
+    LaunchedEffect(Unit) {
+        while (true) { kotlinx.coroutines.delay(1500); batteryOk = app.falai.app.call.KeepConnected.batteryOk(context) }
+    }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Tocar com o app fechado", fontSize = 15.sp)
+            Text(
+                "Deixa um aviso discreto \"Falaí conectado\" para as chamadas tocarem mesmo com o app fechado.",
+                fontSize = 13.sp, color = FalaiColors.TextSec,
+            )
+        }
+        androidx.compose.material3.Switch(
+            checked = keep,
+            onCheckedChange = { keep = it; app.falai.app.call.KeepConnected.set(context, it) },
+            colors = androidx.compose.material3.SwitchDefaults.colors(checkedTrackColor = FalaiColors.Primary),
+        )
+    }
+    if (keep && !batteryOk) {
+        OutlinedButton(
+            onClick = { app.falai.app.call.KeepConnected.askBattery(context) },
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+        ) { Text("🔋  Não deixar o Android desligar o Falaí") }
+        Text(
+            "Toque e responda \"Permitir\". Sem isso, com o celular parado por muito tempo, a chamada pode não tocar.",
+            fontSize = 13.sp, color = FalaiColors.TextSec,
+        )
+    }
+
+    if (!isAdmin) return
+    val turnOn by client.turnConfigured.collectAsState()
+    var open by remember { mutableStateOf(false) }
+    var keyId by remember { mutableStateOf("") }
+    var token by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var msg by remember { mutableStateOf<String?>(null) }
+    Spacer(Modifier.height(4.dp))
+    Row(Modifier.fillMaxWidth().clickable { open = !open }, verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Ajudante de chamadas (4G)", fontSize = 15.sp)
+            Text(
+                if (turnOn == true) "✔ Ligado: chamadas funcionam mesmo entre dois celulares no 4G."
+                else "Desligado. Se uma chamada ficar em \"conectando…\" no 4G, ligue aqui (grátis, Cloudflare).",
+                fontSize = 13.sp, color = if (turnOn == true) FalaiColors.Online else FalaiColors.TextSec,
+            )
+        }
+        Text(if (open) "▲" else "▼", color = FalaiColors.TextSec)
+    }
+    if (open) {
+        Text(
+            "Na Cloudflare: Realtime → TURN Server → Create. Copie o \"Turn Token ID\" e o \"API Token\" e cole aqui.",
+            fontSize = 13.sp, color = FalaiColors.TextSec,
+        )
+        OutlinedTextField(keyId, { keyId = it.trim() }, label = { Text("Turn Token ID") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(token, { token = it.trim() }, label = { Text("API Token") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                enabled = !busy && keyId.isNotEmpty() && token.isNotEmpty(),
+                colors = ButtonDefaults.buttonColors(containerColor = FalaiColors.Primary),
+                onClick = {
+                    busy = true; msg = null
+                    scope.launch {
+                        msg = try { client.setTurn(keyId, token).also { keyId = ""; token = "" } } catch (e: Exception) { e.message ?: "Não deu certo." }
+                        busy = false
+                    }
+                },
+            ) { Text(if (busy) "Testando…" else "Salvar e testar") }
+            if (turnOn == true) TextButton(enabled = !busy, onClick = {
+                busy = true; msg = null
+                scope.launch {
+                    msg = try { client.setTurn("", "") } catch (e: Exception) { e.message ?: "Não deu certo." }
+                    busy = false
+                }
+            }) { Text("Desligar", color = FalaiColors.Error) }
+        }
+        msg?.let { Text(it, fontSize = 14.sp, color = if (it.startsWith("Pronto")) FalaiColors.Online else FalaiColors.TextSec) }
     }
 }

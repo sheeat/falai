@@ -2,12 +2,12 @@
 
 Mensageiro da família. Um celular antigo fica em casa como servidor, e os celulares e tablets da família se conectam a ele pela internet através do Cloudflare Tunnel.
 
-## Estado atual: 0.7 (editor de fotos)
+## Estado atual: 0.8 (chamadas de voz e vídeo)
 
 | Parte | O que faz | Testado |
 |---|---|---|
 | `shared` | Protocolo (JSON) e acesso ao banco, usados pelo servidor e pelo app | Pelos testes abaixo |
-| `server-core` | Servidor em Kotlin puro: pareamento por convite, token por aparelho, WebSocket com mensagens de texto em tempo real, histórico completo com sync em lotes, conversas diretas e grupos | Sim, 14 testes automatizados |
+| `server-core` | Servidor em Kotlin puro: pareamento por convite, token por aparelho, WebSocket com mensagens de texto em tempo real, histórico completo com sync em lotes, conversas diretas e grupos, chamadas (apresenta os aparelhos e repassa os recados do WebRTC) | Sim, testes automatizados |
 | `server-android` | App Android que mantém o servidor ligado: serviço em primeiro plano, wake lock, liga sozinho no boot, tela com status e código do admin | Sim, no celular (M1) |
 | `client-core` | "Motor" do app da família: pareamento, conexão com reconexão automática, fila de envio sem internet, sync do histórico, banco local | Sim, 11 testes contra o servidor de verdade |
 | `app` | App da família (Jetpack Compose): pareamento, lista de conversas, chat, nova conversa/grupo, convites (admin) | Telas conferidas por compilação; precisa ser testado no celular |
@@ -31,7 +31,15 @@ Mensageiro da família. Um celular antigo fica em casa como servidor, e os celul
 - Antes de mandar uma foto (escolhida, tirada com a câmera, arrastada ou colada com Ctrl+V), abre um editor como o do WhatsApp: *Recortar* (arrastando os cantos), *Girar*, *Desenhar* (com cores), *Texto* (arrastável, com cores e tamanho), *Emoji*, *Desfazer* e legenda. No celular e no computador. Se não mexer em nada, vai a foto original, idêntica.
 - No computador, a engrenagem (ou a sua foto no topo) abre as **Configurações**: trocar ou tirar a foto de perfil e mudar o nome, igual ao celular.
 
-Ainda não tem: notificações com o app fechado (FCM), editor de vídeo, chamadas, criptografia no app.
+**Chamadas e cor nova (0.8):**
+- Cor principal **azul-petróleo** no app, na web e na página do convite.
+- **Chamadas de voz e vídeo** pelo botão 📞 / 🎥 no topo da conversa, no celular e no computador. Também em **grupo** (até 6 pessoas): quem não atendeu na hora vê *Chamada em andamento · toque para entrar*.
+- Durante a chamada: microfone, câmera (liga e desliga a qualquer hora, até numa chamada de voz), virar a câmera, viva-voz / ouvido, desligar.
+- **Mostrar a tela**: no computador (Chrome/Edge) e no celular (Android pede confirmação: *Começar agora*).
+- O som e a imagem vão **direto** de um aparelho para o outro (WebRTC); o servidor só apresenta os dois. Para achar o caminho usamos STUN grátis (Google e Cloudflare). Se a chamada ficar em "conectando…" entre dois celulares no 4G, o administrador liga o **Ajudante de chamadas** (TURN da Cloudflare, grátis até 1.000 GB por mês) em *Configurações → Chamadas*.
+- **Tocar com o app fechado** (ligado de fábrica, em *Configurações → Chamadas*): um aviso discreto "Falaí conectado" mantém a conexão. Recomendado tocar em *Não deixar o Android desligar o Falaí*.
+
+Ainda não tem: notificações pelo Google (FCM), editor de vídeo, criptografia no app.
 
 ## Rodar os testes (PC)
 
