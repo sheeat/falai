@@ -1,6 +1,7 @@
 package app.falai.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -86,5 +87,37 @@ fun ConnectionBadge(state: ConnectionState, onDark: Boolean = true) {
             color = if (onDark) Color.White.copy(alpha = 0.85f) else FalaiColors.TextSec,
             modifier = Modifier.padding(end = 4.dp),
         )
+    }
+}
+
+/** Seta de voltar, bem visível (desenhada, mais grossa que um caractere "←"). */
+@Composable
+fun BackButton(onClick: () -> Unit, color: Color = Color.White) {
+    Box(
+        Modifier
+            .size(48.dp)
+            .clip(CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        androidx.compose.foundation.Canvas(Modifier.size(24.dp)) {
+            val w = size.width
+            val h = size.height
+            val stroke = androidx.compose.ui.graphics.drawscope.Stroke(
+                width = 3.dp.toPx(),
+                cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                join = androidx.compose.ui.graphics.StrokeJoin.Round,
+            )
+            val path = androidx.compose.ui.graphics.Path().apply {
+                // Corpo da seta
+                moveTo(w * 0.85f, h * 0.5f)
+                lineTo(w * 0.15f, h * 0.5f)
+                // Ponta
+                moveTo(w * 0.45f, h * 0.18f)
+                lineTo(w * 0.15f, h * 0.5f)
+                lineTo(w * 0.45f, h * 0.82f)
+            }
+            drawPath(path, color, style = stroke)
+        }
     }
 }

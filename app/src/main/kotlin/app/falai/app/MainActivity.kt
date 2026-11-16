@@ -1,5 +1,6 @@
 package app.falai.app
 
+import android.content.ClipboardManager
 import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
@@ -34,6 +35,22 @@ class MainActivity : ComponentActivity() {
         } else {
             pendingInvite.value = parsed
         }
+    }
+
+    /**
+     * Primeira vez que o app abre depois de instalado pela página do convite: a página guardou o
+     * link na área de transferência. Lê só se ainda não está pareado e não chegou convite por link.
+     * (O Android só deixa ler com o app em primeiro plano, por isso aqui.)
+     */
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus || pendingInvite.value != null) return
+        if ((application as FalaiApp).client.account.value != null) return
+        val text = runCatching {
+            val cm = getSystemService(ClipboardManager::class.java)
+            cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString()
+        }.getOrNull() ?: return
+        InviteLinks.parse(text)?.let { pendingInvite.value = it }
     }
 
     override fun onNewIntent(intent: Intent) {

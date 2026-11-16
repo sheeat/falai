@@ -172,7 +172,7 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
                 .padding(horizontal = 4.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(onClick = onBack) { Text("←", color = Color.White, fontSize = 22.sp) }
+            BackButton(onClick = onBack)
             Avatar(summary?.displayName ?: "?", size = 38.dp)
             Spacer(Modifier.width(10.dp))
             Column {

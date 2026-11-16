@@ -89,7 +89,7 @@ fun InviteScreen(client: FalaiClient, onBack: () -> Unit) {
                 .padding(horizontal = 4.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(onClick = onBack) { Text("←", color = Color.White, fontSize = 22.sp) }
+            BackButton(onClick = onBack)
             Text("Convidar", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
         }
 
