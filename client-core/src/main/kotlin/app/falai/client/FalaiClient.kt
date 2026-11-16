@@ -327,6 +327,7 @@ class FalaiClient(
                     _me.value = updated
                 }
                 _publicBase.value = f.publicBase
+                _turnConfigured.value = f.turnConfigured
                 _connection.value = ConnectionState.ONLINE
                 sendFrame(ws, ListUsersFrame("hello-users"))
                 sendFrame(ws, SyncFrame(store.syncedSeq()))
@@ -363,6 +364,17 @@ class FalaiClient(
             }
             is PublicAddressFrame -> {
                 _publicBase.value = f.publicBase
+                pendingRequests.remove(f.requestId)?.complete(f)
+            }
+            is app.falai.protocol.CallStateFrame -> {
+                f.requestId?.let { pendingRequests.remove(it)?.complete(f) }
+                _callEvents.tryEmit(f)
+            }
+            is app.falai.protocol.CallRingFrame -> _callEvents.tryEmit(f)
+            is app.falai.protocol.CallSignalInFrame -> _callEvents.tryEmit(f)
+            is app.falai.protocol.CallIceServersFrame -> pendingRequests.remove(f.requestId)?.complete(f)
+            is app.falai.protocol.TurnStatusFrame -> {
+                _turnConfigured.value = f.configured
                 pendingRequests.remove(f.requestId)?.complete(f)
             }
             is ErrorFrame -> {
@@ -656,6 +668,46 @@ class FalaiClient(
         val id = UUID.randomUUID().toString()
         val f = request(id, app.falai.protocol.ApproveWebFrame(id, code)) as app.falai.protocol.WebApprovedFrame
         return f.deviceName
+    }
+
+    // ---------- Chamadas ----------
+
+    private val _callEvents = kotlinx.coroutines.flow.MutableSharedFlow<ServerFrame>(extraBufferCapacity = 256)
+    /** Chamadas: [app.falai.protocol.CallRingFrame], [app.falai.protocol.CallStateFrame] e recados do WebRTC. */
+    val callEvents: kotlinx.coroutines.flow.SharedFlow<ServerFrame> = _callEvents
+
+    private val _turnConfigured = MutableStateFlow<Boolean?>(null)
+    /** Só para o administrador: o ajudante de chamadas (TURN) está ligado? null = não sei / não sou admin. */
+    val turnConfigured: StateFlow<Boolean?> = _turnConfigured.asStateFlow()
+
+    /** Liga para uma conversa (ou entra na chamada que já existe nela). */
+    suspend fun startCall(conversationId: String, video: Boolean): app.falai.protocol.CallDto {
+        val id = UUID.randomUUID().toString()
+        val f = request(id, app.falai.protocol.CallStartFrame(id, UUID.randomUUID().toString(), conversationId, video))
+        return (f as app.falai.protocol.CallStateFrame).call
+    }
+
+    suspend fun joinCall(callId: String, mic: Boolean, cam: Boolean): app.falai.protocol.CallDto {
+        val id = UUID.randomUUID().toString()
+        return (request(id, app.falai.protocol.CallJoinFrame(id, callId, mic, cam)) as app.falai.protocol.CallStateFrame).call
+    }
+
+    /** Recados sem resposta (sair, recusar, câmera ligada, WebRTC). Devolve false se estiver sem conexão. */
+    fun sendCallFrame(f: ClientFrame): Boolean = sendFrame(socket, f)
+
+    /** Servidores STUN/TURN para o WebRTC. Sem conexão: só os STUN grátis. */
+    suspend fun iceServers(): List<app.falai.protocol.IceServerDto> = try {
+        val id = UUID.randomUUID().toString()
+        (request(id, app.falai.protocol.CallIceRequestFrame(id)) as app.falai.protocol.CallIceServersFrame).servers
+    } catch (e: Exception) {
+        if (e is kotlinx.coroutines.CancellationException && e !is kotlinx.coroutines.TimeoutCancellationException) throw e
+        listOf(app.falai.protocol.IceServerDto(listOf("stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302")))
+    }
+
+    /** Só o administrador: liga (ou desliga, com vazio) o ajudante de chamadas. Devolve a mensagem. */
+    suspend fun setTurn(keyId: String, token: String): String {
+        val id = UUID.randomUUID().toString()
+        return (request(id, app.falai.protocol.SetTurnFrame(id, keyId, token)) as app.falai.protocol.TurnStatusFrame).message
     }
 
     // ---------- Perfil ----------

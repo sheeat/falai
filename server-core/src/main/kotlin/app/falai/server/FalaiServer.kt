@@ -41,6 +41,12 @@ data class ServerConfig(
     val pairWindowMs: Long = 10 * 60_000L,
     /** Onde ficam fotos, vídeos, áudios e arquivos. No celular-servidor: o cartão microSD. */
     val mediaDir: java.io.File = java.io.File("data/media"),
+    /** Chamada sem ninguém atender: desiste depois desse tempo. */
+    val callRingTimeoutMs: Long = 45_000,
+    /** Internet do aparelho caiu no meio da chamada: espera esse tempo antes de tirá-lo. */
+    val callDropGraceMs: Long = 20_000,
+    /** Como pedir credenciais do TURN à Cloudflare (trocado nos testes). */
+    val turnFetch: (String, String) -> String = ::fetchCloudflareIce,
 )
 
 /** Limita tentativas de adivinhar códigos de convite. */
@@ -104,6 +110,15 @@ class Hub {
         byUser[userId]?.forEach { it.name = name }
     }
 
+    /** Para um aparelho só (recados da chamada). */
+    fun deliverToDevice(userId: String, deviceId: String, frame: ServerFrame) {
+        byUser[userId]?.filter { it.device.deviceId == deviceId }?.forEach {
+            if (it.outbox.trySend(frame).isFailure) it.outbox.close()
+        }
+    }
+
+    fun isConnected(deviceId: String): Boolean = byUser.values.any { set -> set.any { it.device.deviceId == deviceId } }
+
     fun onlineDevices(userId: String): Int = byUser[userId]?.size ?: 0
 
     /** Total de aparelhos conectados agora (para a tela do servidor). */
@@ -140,6 +155,9 @@ class FalaiServer(
     /** Falaí no computador: QR Codes esperando o celular, e um limite de pedidos por endereço. */
     val webLinks = WebLinks(clock)
     private val webLimiter = FailureLimiter(30, 10 * 60_000L, clock)
+    /** Chamadas de voz e vídeo em andamento. */
+    val calls = Calls(store, hub, this.log, clock, config.callRingTimeoutMs, config.callDropGraceMs)
+    val iceServers = IceServers(store, this.log, config.turnFetch, clock)
 
     /** Endereço público aprendido pela Cloudflare (ex.: https://falai.falaifamilia.net), ou null. */
     fun publicBase(): String? = invites.publicBase()
@@ -164,6 +182,7 @@ class FalaiServer(
 
     fun stop() {
         engine?.stop(gracePeriodMillis = 500, timeoutMillis = 2000)
+        calls.shutdown()
         engine = null
     }
 
@@ -275,8 +294,10 @@ class FalaiServer(
                     conversations = store.conversationsOf(device.user.id),
                     lastSeq = store.lastSeqFor(device.user.id),
                     publicBase = invites.publicBase(),
+                    turnConfigured = if (device.user.isAdmin) iceServers.turnConfigured() else null,
                 )
             )
+            calls.onConnected(conn)
             for (frame in incoming) {
                 if (frame !is Frame.Text) continue
                 val parsed = try {
@@ -301,6 +322,7 @@ class FalaiServer(
             }
         } finally {
             hub.remove(conn)
+            calls.onDisconnected(device)
             writer.cancel()
             log("Desconectado: ${conn.name} (${device.deviceId.take(8)})")
         }
@@ -315,6 +337,11 @@ class FalaiServer(
         is SetPublicAddressFrame -> f.requestId
         is ApproveWebFrame -> f.requestId
         is UpdateProfileFrame -> f.requestId
+        is CallStartFrame -> f.requestId
+        is CallJoinFrame -> f.requestId
+        is CallIceRequestFrame -> f.requestId
+        is SetTurnFrame -> f.requestId
+        is CallLeaveFrame, is CallDeclineFrame, is CallMediaFrame, is CallSignalFrame -> null
         is SyncFrame -> null
     }
 
@@ -322,6 +349,26 @@ class FalaiServer(
         val device = conn.device
         when (f) {
             is PingFrame -> reply(PongFrame(f.requestId))
+
+            is CallStartFrame -> reply(CallStateFrame(f.requestId, calls.start(device, f)))
+            is CallJoinFrame -> reply(CallStateFrame(f.requestId, calls.join(device, f)))
+            is CallLeaveFrame -> calls.leave(device, f.callId)
+            is CallDeclineFrame -> calls.decline(device, f)
+            is CallMediaFrame -> calls.media(device, f)
+            is CallSignalFrame -> calls.signal(device, f)
+            // Pode ir até a Cloudflare: responde em outra linha, sem travar a conexão.
+            is CallIceRequestFrame -> Thread { reply(CallIceServersFrame(f.requestId, iceServers.servers())) }.start()
+            is SetTurnFrame -> {
+                if (!device.user.isAdmin) throw FalaiException("forbidden", "Só o administrador liga o ajudante de chamadas.")
+                Thread {
+                    try {
+                        val (on, msg) = iceServers.configure(f.keyId, f.token)
+                        reply(TurnStatusFrame(f.requestId, on, msg))
+                    } catch (e: FalaiException) {
+                        reply(ErrorFrame(e.code, e.message ?: "", f.requestId))
+                    }
+                }.start()
+            }
 
             is UpdateProfileFrame -> {
                 val u = store.updateProfile(device.user.id, f.name, f.avatarMediaId)

@@ -17,11 +17,16 @@ class FalaiApp : Application() {
     lateinit var client: FalaiClient
         private set
 
+    /** Chamadas de voz e vídeo. */
+    lateinit var calls: app.falai.app.call.CallManager
+        private set
+
     override fun onCreate() {
         super.onCreate()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val store = ClientStore(AndroidDb(File(filesDir, "falai-app.db").path))
         client = FalaiClient(store, scope, File(filesDir, "media"), log = { Log.i("Falai", it) })
+        calls = app.falai.app.call.CallManager(this, client, scope)
         if (store.account() != null) client.start()
 
         // Quando a internet volta (troca de Wi-Fi para dados, etc.), reconecta na hora.

@@ -232,6 +232,8 @@ data class HelloFrame(
     val lastSeq: Long,
     /** Endereço do servidor na internet (ex.: https://falai.falaifamilia.net), se já for conhecido. */
     val publicBase: String? = null,
+    /** Só para o administrador: o "ajudante de chamadas" (TURN da Cloudflare) está configurado. */
+    val turnConfigured: Boolean? = null,
 ) : ServerFrame
 
 @Serializable @SerialName("ack")
@@ -294,3 +296,99 @@ object WebLinkCodes {
         return code.takeIf { it.length == 8 && it.all { c -> c in ALPHABET } }
     }
 }
+
+// ---------- Chamadas de voz e vídeo (WebRTC) ----------
+//
+// O servidor só "apresenta" os aparelhos: o áudio e o vídeo vão direto de um aparelho para o
+// outro (WebRTC). Em grupo, cada um liga para cada um (até [MAX_CALL_PARTICIPANTS]).
+//
+//   A: call_start          -> servidor cria a chamada, responde call_state e manda call_ring aos outros
+//   B: call_join           -> servidor manda call_state (com A e B) para todos da conversa
+//   B: call_signal(offer)  -> quem entra liga para quem já estava; A responde com call_signal(answer)
+//   *: call_signal(ice)    -> caminhos de rede (ICE), nos dois sentidos
+//   *: call_leave          -> sai; conversa a dois termina quando um sai
+//   B: call_decline        -> recusa (a dois: termina a chamada; em grupo: só para de tocar para B)
+
+const val MAX_CALL_PARTICIPANTS = 6
+
+@Serializable
+data class CallParticipantDto(
+    val deviceId: String,
+    val userId: String,
+    val mic: Boolean = true,
+    val cam: Boolean = false,
+    /** Mostrando a tela do aparelho/computador. */
+    val screen: Boolean = false,
+)
+
+@Serializable
+data class CallDto(
+    val id: String,
+    val conversationId: String,
+    /** Começou como chamada de vídeo (true) ou só de voz (false). */
+    val video: Boolean,
+    val startedBy: String,
+    val startedAt: Long,
+    val participants: List<CallParticipantDto>,
+    /** Quem recusou (os aparelhos dessa pessoa param de tocar). */
+    val declinedBy: List<String> = emptyList(),
+    /** Terminou. [endReason]: "hangup", "no_answer", "declined", "busy". */
+    val ended: Boolean = false,
+    val endReason: String? = null,
+)
+
+/** Servidor STUN/TURN que o aparelho deve usar para achar o caminho até os outros. */
+@Serializable
+data class IceServerDto(val urls: List<String>, val username: String? = null, val credential: String? = null)
+
+@Serializable @SerialName("call_start")
+data class CallStartFrame(val requestId: String, val callId: String, val conversationId: String, val video: Boolean) : ClientFrame
+
+@Serializable @SerialName("call_join")
+data class CallJoinFrame(val requestId: String, val callId: String, val mic: Boolean = true, val cam: Boolean = false) : ClientFrame
+
+@Serializable @SerialName("call_leave")
+data class CallLeaveFrame(val callId: String) : ClientFrame
+
+@Serializable @SerialName("call_decline")
+data class CallDeclineFrame(val callId: String, val busy: Boolean = false) : ClientFrame
+
+/** Microfone, câmera e tela ligados ou não (os outros mostram a foto quando a câmera está desligada). */
+@Serializable @SerialName("call_media")
+data class CallMediaFrame(val callId: String, val mic: Boolean, val cam: Boolean, val screen: Boolean = false) : ClientFrame
+
+/** Recado WebRTC para um aparelho: [kind] = "offer", "answer" ou "ice"; [data] = SDP ou candidato (JSON). */
+@Serializable @SerialName("call_signal")
+data class CallSignalFrame(val callId: String, val toDeviceId: String, val kind: String, val data: String) : ClientFrame
+
+@Serializable @SerialName("call_ice")
+data class CallIceRequestFrame(val requestId: String) : ClientFrame
+
+@Serializable @SerialName("call_state")
+data class CallStateFrame(val requestId: String? = null, val call: CallDto) : ServerFrame
+
+/** Alguém está ligando para uma conversa minha. */
+@Serializable @SerialName("call_ring")
+data class CallRingFrame(val call: CallDto) : ServerFrame
+
+@Serializable @SerialName("call_signal_in")
+data class CallSignalInFrame(
+    val callId: String,
+    val fromDeviceId: String,
+    val fromUserId: String,
+    val kind: String,
+    val data: String,
+) : ServerFrame
+
+@Serializable @SerialName("call_ice_servers")
+data class CallIceServersFrame(val requestId: String, val servers: List<IceServerDto>) : ServerFrame
+
+/**
+ * Só o administrador: liga o "ajudante de chamadas" (TURN da Cloudflare, grátis até 1.000 GB/mês),
+ * que faz a chamada funcionar mesmo quando os dois estão no 4G. Vazio = desliga.
+ */
+@Serializable @SerialName("set_turn")
+data class SetTurnFrame(val requestId: String, val keyId: String, val token: String) : ClientFrame
+
+@Serializable @SerialName("turn_status")
+data class TurnStatusFrame(val requestId: String, val configured: Boolean, val message: String) : ServerFrame

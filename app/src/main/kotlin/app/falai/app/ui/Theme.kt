@@ -37,18 +37,18 @@ import app.falai.client.FalaiClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/** Cores próprias do Falaí: laranja-terracota, para não parecer cópia de outro app. */
+/** Cores próprias do Falaí: azul-petróleo, calmo e moderno (sem parecer cópia de outro app). */
 object FalaiColors {
-    val Primary = Color(0xFFC8553D)
-    val PrimaryDark = Color(0xFF8E3B2A)
-    val ChatBg = Color(0xFFF6F1EA)
-    val BubbleOut = Color(0xFFFFE1D3)
+    val Primary = Color(0xFF136F7A)
+    val PrimaryDark = Color(0xFF0B4F57)
+    val ChatBg = Color(0xFFECF3F3)
+    val BubbleOut = Color(0xFFCFEDEF)
     val BubbleIn = Color(0xFFFFFFFF)
-    val TextSec = Color(0xFF6B6460)
+    val TextSec = Color(0xFF5B6B6E)
     val Online = Color(0xFF2E9E5B)
     val Warning = Color(0xFFD08A00)
     val Error = Color(0xFFC62828)
-    val Divider = Color(0xFFEAE4DE)
+    val Divider = Color(0xFFDCE6E7)
 }
 
 @Composable
@@ -71,7 +71,7 @@ fun FalaiTheme(content: @Composable () -> Unit) {
  */
 @Composable
 fun Avatar(name: String, size: Dp = 44.dp, client: FalaiClient? = null, mediaId: String? = null) {
-    val palette = listOf(0xFFC8553D, 0xFF3D7EC8, 0xFF2E9E5B, 0xFF8E5BC8, 0xFFD08A00, 0xFF3DA6A6)
+    val palette = listOf(0xFFD9604C, 0xFF3D7EC8, 0xFF2E9E5B, 0xFF8E5BC8, 0xFFD08A00, 0xFF3DA6A6)
     val color = Color(palette[(name.hashCode() and 0x7fffffff) % palette.size])
     var photo by remember(mediaId) { mutableStateOf(mediaId?.let { AvatarCache.get(it) }) }
     if (client != null && !mediaId.isNullOrEmpty() && photo == null) {

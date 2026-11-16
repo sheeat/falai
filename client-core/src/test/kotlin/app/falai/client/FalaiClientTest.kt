@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import java.io.File
@@ -633,5 +634,40 @@ class FalaiClientTest {
         // O mesmo QR Code não serve de novo.
         val de_novo = runCatching { chefe.approveWeb(link.code) }.exceptionOrNull()
         assertTrue(de_novo is FalaiClientException && de_novo.code == "not_found", "$de_novo")
+    }
+
+    @Test
+    fun `chamada - toca no outro, atende e os recados do WebRTC chegam`() = runBlocking {
+        val (chefe, ana, conv) = family()
+        val anaEvents = java.util.concurrent.CopyOnWriteArrayList<app.falai.protocol.ServerFrame>()
+        val chefeEvents = java.util.concurrent.CopyOnWriteArrayList<app.falai.protocol.ServerFrame>()
+        val j1 = scope.launch { ana.callEvents.collect { anaEvents += it } }
+        val j2 = scope.launch { chefe.callEvents.collect { chefeEvents += it } }
+        delay(100)
+
+        val call = chefe.startCall(conv, video = true)
+        assertEquals(1, call.participants.size)
+        eventually("tocar na Ana") { anaEvents.any { it is app.falai.protocol.CallRingFrame } }
+
+        val joined = ana.joinCall(call.id, mic = true, cam = true)
+        assertEquals(2, joined.participants.size)
+        eventually("Chefe saber que atendeu") {
+            chefeEvents.any { it is app.falai.protocol.CallStateFrame && it.call.participants.size == 2 }
+        }
+
+        val chefeDevice = chefe.account.value!!.deviceId
+        assertTrue(ana.sendCallFrame(app.falai.protocol.CallSignalFrame(call.id, chefeDevice, "offer", "sdp-da-ana")))
+        eventually("oferta chegar") {
+            chefeEvents.any { it is app.falai.protocol.CallSignalInFrame && it.data == "sdp-da-ana" }
+        }
+
+        val ice = ana.iceServers()
+        assertTrue(ice.isNotEmpty() && ice.first().urls.first().startsWith("stun:"))
+
+        ana.sendCallFrame(app.falai.protocol.CallLeaveFrame(call.id))
+        eventually("terminar para o Chefe") {
+            chefeEvents.any { it is app.falai.protocol.CallStateFrame && it.call.ended }
+        }
+        j1.cancel(); j2.cancel()
     }
 }
