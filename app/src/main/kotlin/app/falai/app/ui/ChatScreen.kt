@@ -43,6 +43,9 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import app.falai.protocol.AttachmentDto
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -166,6 +169,11 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
     }
 
+    // Foto ou vídeo aberto em tela cheia (dentro do app).
+    var viewing by remember { mutableStateOf<Pair<File, AttachmentDto>?>(null) }
+
+    Box(Modifier.fillMaxSize()) {
+    CompositionLocalProvider(LocalOpenMedia provides { f, a -> viewing = f to a }) {
     Column(Modifier.fillMaxSize().background(FalaiColors.ChatBg).imePadding()) {
         Row(
             Modifier.fillMaxWidth().background(FalaiColors.Primary).statusBarsPadding()
@@ -288,7 +296,13 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
             }
         }
     }
+    }
+    viewing?.let { (f, a) -> MediaViewer(f, a, onClose = { viewing = null }) }
+    }
 }
+
+/** Abre foto/vídeo em tela cheia; quem fornece é a tela da conversa. */
+private val LocalOpenMedia = staticCompositionLocalOf<(File, AttachmentDto) -> Unit> { { _, _ -> } }
 
 @Composable
 private fun Bubble(client: FalaiClient, m: LocalMessage, mine: Boolean, authorName: String?, uploadProgress: Float?) {
@@ -328,6 +342,11 @@ private fun Bubble(client: FalaiClient, m: LocalMessage, mine: Boolean, authorNa
 private fun AttachmentView(client: FalaiClient, m: LocalMessage) {
     val att = m.attachment ?: return
     val context = LocalContext.current
+    val openMedia = LocalOpenMedia.current
+    // Foto e vídeo abrem aqui dentro; os outros arquivos, no app do celular que sabe abrir.
+    fun open(f: File) {
+        if (att.kind == "image" || att.kind == "video") openMedia(f, att) else openExternally(context, f, att.mime)
+    }
     val scope = rememberCoroutineScope()
     var file by remember(m.id, m.localPath) { mutableStateOf(m.localPath?.let(::File)?.takeIf { it.exists() }) }
     var downloading by remember(m.id) { mutableStateOf(false) }
@@ -341,7 +360,7 @@ private fun AttachmentView(client: FalaiClient, m: LocalMessage) {
             try {
                 val f = client.mediaFile(att)
                 file = f
-                if (thenOpen) openExternally(context, f, att.mime)
+                if (thenOpen) open(f)
             } catch (e: Exception) {
                 error = e.message ?: "Não consegui baixar."
             } finally {
@@ -376,7 +395,7 @@ private fun AttachmentView(client: FalaiClient, m: LocalMessage) {
                     .aspectRatio(ratio)
                     .clip(RoundedCornerShape(8.dp))
                     .background(Color(0xFF3A3330))
-                    .clickable { if (f != null) openExternally(context, f, att.mime) else download(true) },
+                    .clickable { if (f != null) open(f) else download(true) },
                 contentAlignment = Alignment.Center,
             ) {
                 if (shown != null) {
@@ -419,7 +438,7 @@ private fun AttachmentView(client: FalaiClient, m: LocalMessage) {
                 .width(260.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(Color.Black.copy(alpha = 0.05f))
-                .clickable { val f = file; if (f != null) openExternally(context, f, att.mime) else download(true) }
+                .clickable { val f = file; if (f != null) open(f) else download(true) }
                 .padding(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
