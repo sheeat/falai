@@ -505,4 +505,19 @@ class FalaiClientTest {
             t.interrupt()
         }
     }
+
+    @Test
+    fun `admin deixa o app disponivel para download so quando e mais novo`() = runBlocking {
+        val (chefe, ana, _) = family()
+        val apk = File(dir, "app.apk").apply { writeBytes(byteArrayOf(0x50, 0x4B) + ByteArray(100_000) { 7 }) }
+        val v1 = chefe.publishAppIfNewer(apk, 6, "0.4.0")
+        assertEquals(6, v1?.versionCode)
+        // Mesma versão: não envia de novo (o arquivo no servidor não muda).
+        val outro = File(dir, "outro.apk").apply { writeBytes(byteArrayOf(0x50, 0x4B, 1, 2, 3)) }
+        assertEquals(100_002L, chefe.publishAppIfNewer(outro, 6, "0.4.0")?.size)
+        // Quem não é admin não envia.
+        assertEquals(null, ana.publishAppIfNewer(outro, 9, "9"))
+        // Versão nova: envia.
+        assertEquals(5L, chefe.publishAppIfNewer(outro, 7, "0.4.1")?.size)
+    }
 }

@@ -1,6 +1,7 @@
 package app.falai.client
 
 import app.falai.protocol.AckFrame
+import app.falai.protocol.AppApkInfo
 import app.falai.protocol.ClientFrame
 import app.falai.protocol.ConversationDto
 import app.falai.protocol.ConversationFrame
@@ -38,6 +39,7 @@ import kotlinx.coroutines.withTimeout
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
@@ -148,6 +150,41 @@ class FalaiClient(
                 "network",
                 "Não consegui falar com o servidor (${lastError?.message ?: "sem resposta"}). Confira o endereço e a internet e tente de novo com o mesmo código.",
             )
+        }
+
+    // ---------- Arquivo do app (para quem for convidado baixar) ----------
+
+    /**
+     * Só o administrador: se o servidor não tem este app (ou tem um mais antigo), envia o arquivo.
+     * Devolve a versão que ficou no servidor, ou null se não deu.
+     */
+    suspend fun publishAppIfNewer(apk: java.io.File, versionCode: Long, versionName: String): AppApkInfo? =
+        withContext(Dispatchers.IO) {
+            val acc = store.account() ?: return@withContext null
+            if (!acc.isAdmin || !apk.exists()) return@withContext null
+            val current = runCatching {
+                mediaHttp.newCall(Request.Builder().url("${acc.serverUrl}/api/app-apk").build()).execute().use { r ->
+                    val t = r.body?.string().orEmpty().trim()
+                    if (!r.isSuccessful || t == "null" || t.isEmpty()) null
+                    else FalaiJson.decodeFromString(AppApkInfo.serializer(), t)
+                }
+            }.getOrNull()
+            if (current != null && current.versionCode >= versionCode) return@withContext current
+            val req = Request.Builder()
+                .url("${acc.serverUrl}/api/app-apk?versionCode=$versionCode&versionName=" + java.net.URLEncoder.encode(versionName, "UTF-8"))
+                .header("Authorization", "Bearer ${acc.token}")
+                .put(apk.asRequestBody("application/vnd.android.package-archive".toMediaType()))
+                .build()
+            try {
+                mediaHttp.newCall(req).execute().use { r ->
+                    val t = r.body?.string().orEmpty()
+                    if (!r.isSuccessful) { log("Envio do app falhou: ${r.code} $t"); null }
+                    else FalaiJson.decodeFromString(AppApkInfo.serializer(), t).also { log("App ${it.versionName} enviado ao servidor") }
+                }
+            } catch (e: IOException) {
+                log("Envio do app falhou: ${e.message}")
+                null
+            }
         }
 
     // ---------- Conexão ----------

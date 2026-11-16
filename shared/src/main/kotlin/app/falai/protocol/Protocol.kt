@@ -106,6 +106,42 @@ private val BASE64_CHARS = Regex("^[A-Za-z0-9+/]+={0,2}$")
 fun sanitizeThumb(thumb: String?): String? =
     thumb?.takeIf { it.length in 4..MAX_THUMB_CHARS && BASE64_CHARS.matches(it) }
 
+// ---------- Convite por link ----------
+
+/**
+ * Link de convite e o "atalho" que abre o app já preenchido.
+ * Página: https://SERVIDOR/convite/CODIGO  ·  App: falai://convite?s=https://SERVIDOR&c=CODIGO
+ */
+object InviteLinks {
+    fun page(base: String, code: String) = "${base.trimEnd('/')}/convite/$code"
+
+    fun appUri(base: String, code: String, forExistingUser: Boolean = false): String =
+        "falai://convite?s=" + java.net.URLEncoder.encode(base.trimEnd('/'), "UTF-8") + "&c=" + code +
+            (if (forExistingUser) "&d=1" else "")
+
+    data class Parsed(val server: String, val code: String, val forExistingUser: Boolean)
+
+    /** Entende o link da página, o atalho do app ou um texto colado que contenha um deles. */
+    fun parse(text: String): Parsed? {
+        val t = text.trim()
+        Regex("""falai://convite\?([^\s]+)""").find(t)?.let { m ->
+            val params = m.groupValues[1].split('&').mapNotNull {
+                val i = it.indexOf('='); if (i <= 0) null else it.substring(0, i) to java.net.URLDecoder.decode(it.substring(i + 1), "UTF-8")
+            }.toMap()
+            val s = params["s"] ?: return null
+            val c = params["c"] ?: return null
+            return Parsed(s, c.uppercase(), params["d"] == "1")
+        }
+        Regex("""(https?://[A-Za-z0-9.\-]+(?::\d+)?)/convite/([A-Za-z0-9]+)""").find(t)?.let { m ->
+            return Parsed(m.groupValues[1], m.groupValues[2].uppercase(), false)
+        }
+        return null
+    }
+}
+
+@Serializable
+data class AppApkInfo(val versionCode: Long, val versionName: String, val size: Long)
+
 // ---------- Mídia (HTTP) ----------
 //
 //   POST /api/media                      MediaCreateRequest -> MediaStatus   (começa um envio)
@@ -197,7 +233,13 @@ data class ConversationFrame(val requestId: String? = null, val conversation: Co
 data class UsersFrame(val requestId: String, val users: List<UserDto>) : ServerFrame
 
 @Serializable @SerialName("invite")
-data class InviteFrame(val requestId: String, val code: String, val expiresAt: Long) : ServerFrame
+data class InviteFrame(
+    val requestId: String,
+    val code: String,
+    val expiresAt: Long,
+    /** Link para mandar pelo WhatsApp (https://.../convite/CODIGO). Null se o servidor ainda não sabe o próprio endereço. */
+    val link: String? = null,
+) : ServerFrame
 
 @Serializable @SerialName("pong")
 data class PongFrame(val requestId: String) : ServerFrame

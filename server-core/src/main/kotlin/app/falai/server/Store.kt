@@ -141,6 +141,36 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
 
     private fun normalizeCode(code: String) = code.uppercase().filter { it.isLetterOrDigit() }
 
+    // ---------- Configurações guardadas ----------
+
+    fun getMeta(key: String): String? =
+        db.query("SELECT value FROM meta WHERE key = ?", key).firstOrNull()?.string("value")
+
+    fun setMeta(key: String, value: String) {
+        db.transaction {
+            db.update("DELETE FROM meta WHERE key = ?", key)
+            db.execute("INSERT INTO meta (key, value) VALUES (?, ?)", key, value)
+        }
+    }
+
+    /** O que a página do convite mostra. [status]: "ok", "used", "expired" ou "invalid". */
+    data class InvitePreview(val status: String, val inviterName: String?, val forUserName: String?)
+
+    fun invitePreview(code: String): InvitePreview {
+        val c = normalizeCode(code)
+        if (c.isEmpty() || c.length > 32) return InvitePreview("invalid", null, null)
+        val invite = db.query("SELECT * FROM invites WHERE code_hash = ?", sha256(c)).firstOrNull()
+            ?: return InvitePreview("invalid", null, null)
+        val inviter = invite.stringOrNull("created_by")?.let(::userById)?.name
+        val forUser = invite.stringOrNull("for_user_id")?.let(::userById)?.name
+        val status = when {
+            invite.longOrNull("used_at") != null -> "used"
+            invite.long("expires_at") < clock() -> "expired"
+            else -> "ok"
+        }
+        return InvitePreview(status, inviter, forUser)
+    }
+
     // ---------- Usuários e convites ----------
 
     fun hasUsers(): Boolean = db.query("SELECT 1 AS x FROM users LIMIT 1").isNotEmpty()
