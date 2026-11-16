@@ -32,6 +32,16 @@ class ServerService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        // Se o servidor quebrar, guarda o motivo para a tela mostrar na próxima vez.
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            runCatching {
+                getSharedPreferences("status", MODE_PRIVATE).edit()
+                    .putString("crash", java.text.SimpleDateFormat("dd/MM HH:mm", java.util.Locale.ROOT).format(java.util.Date()) + " " + e)
+                    .commit()
+            }
+            previous?.uncaughtException(t, e)
+        }
         createChannel()
         val notification = buildNotification("Iniciando…")
         if (Build.VERSION.SDK_INT >= 34) {

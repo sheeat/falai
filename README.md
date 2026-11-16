@@ -2,7 +2,7 @@
 
 Mensageiro da família. Um celular antigo fica em casa como servidor, e os celulares e tablets da família se conectam a ele pela internet através do Cloudflare Tunnel.
 
-## Estado atual: M3 (fotos, vídeos, áudios e arquivos)
+## Estado atual: M4 (pela internet, com convite por link)
 
 | Parte | O que faz | Testado |
 |---|---|---|
@@ -16,7 +16,9 @@ Mensageiro da família. Um celular antigo fica em casa como servidor, e os celul
 
 > ⚠️ A pasta de mídia do servidor é apagada se o app do servidor for **desinstalado**. Atualizar o app não apaga nada.
 
-Ainda não tem: notificações com o app fechado (FCM), editor de fotos/vídeo, chamadas (M4), criptografia no app.
+**Pela internet (M4):** o servidor fica acessível em `https://falai.SEUDOMINIO` pela Cloudflare Tunnel. Os convites viram **link**: o administrador toca em *Convidar → Enviar convite* e manda pelo WhatsApp. A pessoa abre o link, baixa o app (o servidor oferece o arquivo) e toca em *Abrir o convite no Falaí*: só precisa digitar o nome.
+
+Ainda não tem: notificações com o app fechado (FCM), editor de fotos/vídeo, chamadas, criptografia no app.
 
 ## Rodar os testes (PC)
 
@@ -66,18 +68,22 @@ O servidor só aceita conexões do próprio celular (`127.0.0.1`). Quem chega de
 
 ### Cloudflare Tunnel (acesso de fora)
 
-1. Na Cloudflare (plano grátis), adicione o seu domínio e troque os nameservers na Namecheap pelos dois que a Cloudflare indicar.
-2. No celular-servidor, instale o **Termux** pelo F-Droid (a versão da Play Store está desatualizada) e rode:
+1. Na Cloudflare (plano grátis), adicione o seu domínio e troque os nameservers na Namecheap pelos dois que a Cloudflare indicar ("Custom DNS").
+2. No celular-servidor, instale o **F-Droid** e, por ele, o **Termux** e o **Termux:Boot** (os dois do F-Droid; abra o Termux:Boot uma vez). No Termux:
    ```bash
-   pkg install cloudflared
-   cloudflared tunnel login
+   pkg update -y && pkg install -y cloudflared curl
+   cloudflared tunnel login                     # abre o navegador: escolha o domínio e autorize
    cloudflared tunnel create falai
-   cloudflared tunnel route dns falai falai.SEUDOMINIO.com
-   cloudflared tunnel run --url http://127.0.0.1:8443 falai
+   cloudflared tunnel route dns falai falai.SEUDOMINIO
    ```
-3. Teste de qualquer lugar: `https://falai.SEUDOMINIO.com/health`.
+3. Para a ponte ligar sozinha quando o celular liga (e religar se cair):
+   ```bash
+   curl -s http://127.0.0.1:8443/setup/tunel | sh
+   ```
+   O registro fica em `~/falai-tunel.log`. Deixe a bateria do Termux **sem restrição**.
+4. Teste de qualquer lugar: `https://falai.SEUDOMINIO/health`.
 
-Iniciar o túnel sozinho no boot (Termux:Boot) e o wake lock do Termux entram em uma próxima etapa.
+Na primeira vez em *Convidar*, o app pede o endereço (ex.: `falai.SEUDOMINIO`); a partir daí, os convites saem como link. Cada convite vale 7 dias e serve para uma pessoa.
 
 ### Cuidado com a bateria
 
@@ -87,7 +93,10 @@ Um celular ligado na tomada 24 horas por meses pode inchar a bateria. Se o Linea
 
 **HTTP**
 - `GET /health` → `{"ok":true,"version":1}`
-- `POST /api/pair` `{code, deviceName, userName?}` → `{userId, deviceId, token, isAdmin}`
+- `GET /convite/{codigo}` → página do convite (abre o app com `falai://convite?s=SERVIDOR&c=CODIGO`)
+- `GET /app/falai.apk` → arquivo do app; `GET /api/app-apk` → versão disponível; `PUT /api/app-apk?versionCode=N&versionName=X` (só admin)
+- `GET /setup/tunel` → instalador do Termux:Boot (só no próprio celular-servidor)
+- `POST /api/pair` `{code, deviceName, userName?, attemptId?}` → `{userId, deviceId, token, isAdmin}`
   - convite de uso único, vale 24h; 10 erros por IP em 10 minutos bloqueiam por um tempo
   - o primeiro pareamento (com o código do administrador) vira administrador
 

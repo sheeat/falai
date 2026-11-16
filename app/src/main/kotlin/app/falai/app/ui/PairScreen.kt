@@ -17,6 +17,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,18 +34,24 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.Alignment
 import app.falai.client.FalaiClient
 import app.falai.client.FalaiClientException
+import app.falai.protocol.InviteLinks
 import kotlinx.coroutines.launch
 
-/** Primeira tela: liga este aparelho ao servidor da família com um código de convite. */
+/**
+ * Primeira tela: liga este aparelho ao servidor da família.
+ * Com [invite] (veio de um link de convite), só pede o nome; o resto já vem preenchido.
+ */
 @Composable
-fun PairScreen(client: FalaiClient) {
-    var server by rememberSaveable { mutableStateOf("") }
-    var code by rememberSaveable { mutableStateOf("") }
+fun PairScreen(client: FalaiClient, invite: InviteLinks.Parsed? = null) {
+    var server by rememberSaveable(invite) { mutableStateOf(invite?.server ?: "") }
+    var code by rememberSaveable(invite) { mutableStateOf(invite?.code ?: "") }
     var name by rememberSaveable { mutableStateOf("") }
     var device by rememberSaveable { mutableStateOf("${Build.MANUFACTURER} ${Build.MODEL}".trim()) }
+    var showDetails by rememberSaveable(invite) { mutableStateOf(invite == null) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val forExistingUser = invite?.forExistingUser == true
 
     Column(
         modifier = Modifier
@@ -56,43 +63,72 @@ fun PairScreen(client: FalaiClient) {
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Text("Falaí", fontSize = 36.sp, fontWeight = FontWeight.Bold, color = FalaiColors.Primary)
-        Text("O mensageiro da família. Peça um código de convite para quem cuida do servidor.", color = FalaiColors.TextSec)
+        if (invite != null) {
+            Text(
+                if (forExistingUser) "Convite para ligar mais um aparelho seu. É só tocar em Entrar."
+                else "Você foi convidado! 🎉\nDigite o seu nome e toque em Entrar.",
+                fontSize = 18.sp,
+            )
+        } else {
+            Text(
+                "O mensageiro da família. Toque no link de convite que você recebeu, ou cole o link aqui embaixo.",
+                color = FalaiColors.TextSec,
+            )
+        }
         Spacer(Modifier.height(8.dp))
 
-        OutlinedTextField(
-            value = server, onValueChange = { server = it },
-            label = { Text("Endereço do servidor") },
-            placeholder = { Text("falai.seudominio.com") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = code, onValueChange = { code = it.uppercase() },
-            label = { Text("Código de convite") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = name, onValueChange = { name = it },
-            label = { Text("Seu nome") },
-            supportingText = { Text("Não precisa se este convite for para mais um aparelho seu.") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = device, onValueChange = { device = it },
-            label = { Text("Nome deste aparelho") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        if (!forExistingUser) {
+            OutlinedTextField(
+                value = name, onValueChange = { name = it },
+                label = { Text("Seu nome") },
+                supportingText = if (invite == null) {
+                    { Text("Não precisa se este convite for para mais um aparelho seu.") }
+                } else null,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
+        if (showDetails) {
+            OutlinedTextField(
+                value = code,
+                onValueChange = { typed ->
+                    // Colou o link inteiro? Separa o endereço e o código sozinho.
+                    val parsed = InviteLinks.parse(typed)
+                    if (parsed != null) {
+                        server = parsed.server
+                        code = parsed.code
+                    } else {
+                        code = typed.uppercase()
+                    }
+                },
+                label = { Text("Link ou código de convite") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = server, onValueChange = { server = it },
+                label = { Text("Endereço do servidor") },
+                placeholder = { Text("falai.seudominio.com") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = device, onValueChange = { device = it },
+                label = { Text("Nome deste aparelho") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
 
         error?.let { Text(it, color = FalaiColors.Error) }
 
         Button(
-            enabled = !busy && server.isNotBlank() && code.isNotBlank() && device.isNotBlank(),
+            enabled = !busy && server.isNotBlank() && code.isNotBlank() && device.isNotBlank() &&
+                (forExistingUser || invite == null || name.isNotBlank()),
             onClick = {
                 busy = true
                 error = null
@@ -115,11 +151,17 @@ fun PairScreen(client: FalaiClient) {
             else Text("Entrar", fontSize = 17.sp)
         }
 
-        Column(horizontalAlignment = Alignment.Start) {
-            Text(
-                "Testando em casa? No emulador use http://10.0.2.2:8443 e no próprio celular-servidor use http://127.0.0.1:8443.",
-                color = FalaiColors.TextSec, fontSize = 13.sp,
-            )
+        if (invite != null && !showDetails) {
+            TextButton(onClick = { showDetails = true }) { Text("Ver detalhes do convite", color = FalaiColors.TextSec) }
+        }
+
+        if (invite == null) {
+            Column(horizontalAlignment = Alignment.Start) {
+                Text(
+                    "Testando em casa? No emulador use http://10.0.2.2:8443 e no próprio celular-servidor use http://127.0.0.1:8443.",
+                    color = FalaiColors.TextSec, fontSize = 13.sp,
+                )
+            }
         }
     }
 }

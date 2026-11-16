@@ -353,4 +353,35 @@ class FalaiServerTest {
         c.send(SyncFrame(0))
         assertEquals("antes de reiniciar", c.expect<SyncBatchFrame>().messages.single().body)
     }
+
+    @Test
+    fun `repetir o pareamento com a mesma tentativa nao gasta o convite`() = runBlocking {
+        val (admin, _, _) = family()
+        val (a, _) = connectAndHello(admin.token)
+        a.send(CreateInviteFrame("r7", forUserId = admin.userId))
+        val inv = a.expect<InviteFrame>()
+        a.close()
+        suspend fun tentar(attempt: String) = http.post("$base/api/pair") {
+            setBody(FalaiJson.encodeToString(PairRequest.serializer(), PairRequest(inv.code, "Celular pessoal", null, attempt)))
+        }
+        val tentativa = uuid()
+        // 1ª vez: o servidor pareia, mas a resposta "se perde" no 4G.
+        val perdida = FalaiJson.decodeFromString(PairResponse.serializer(), tentativa.let { tentar(it).bodyAsText() })
+        // O aparelho repete com o mesmo id: recebe o mesmo aparelho, com um token novo.
+        val r2 = tentar(tentativa)
+        assertEquals(HttpStatusCode.OK, r2.status, r2.bodyAsText())
+        val ok = FalaiJson.decodeFromString(PairResponse.serializer(), r2.bodyAsText())
+        assertEquals(perdida.deviceId, ok.deviceId)
+        assertEquals(admin.userId, ok.userId)
+        assertTrue(ok.isAdmin)
+        // O token novo funciona; o que se perdeu não vale mais.
+        val (_, hello) = connectAndHello(ok.token)
+        assertEquals(admin.userId, hello.user.id)
+        val velho = connect(perdida.token)
+        assertEquals(4001, withTimeout(5000) { velho.session.closeReason.await() }?.code?.toInt())
+        // Outra pessoa (outro id de tentativa) com o mesmo código continua barrada.
+        val intruso = tentar(uuid())
+        assertEquals(HttpStatusCode.Forbidden, intruso.status)
+        assertTrue(intruso.bodyAsText().contains("já foi usado"))
+    }
 }

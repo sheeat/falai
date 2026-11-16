@@ -126,6 +126,10 @@ class FalaiServer(
     }
     private val limiter = FailureLimiter(config.pairMaxFailures, config.pairWindowMs, clock)
     private val mediaFiles = MediaFiles(config.mediaDir, store, this.log)
+    private val invites = InviteSupport(store, config.mediaDir, this.log)
+
+    /** Endereço público aprendido pela Cloudflare (ex.: https://falai.falaifamilia.net), ou null. */
+    fun publicBase(): String? = invites.publicBase()
     private var engine: EmbeddedServer<*, *>? = null
 
     /** Sobe o servidor. Se ainda não há ninguém cadastrado, devolve o código do administrador. */
@@ -166,6 +170,7 @@ class FalaiServer(
             timeout = 45.seconds
             maxFrameSize = 256 * 1024
         }
+        intercept(io.ktor.server.application.ApplicationCallPipeline.Plugins) { invites.noteRequest(context) }
         routing {
             get("/health") {
                 call.respondText("""{"ok":true,"version":$PROTOCOL_VERSION}""", ContentType.Application.Json)
@@ -214,6 +219,7 @@ class FalaiServer(
             }
 
             mediaRoutes(store, mediaFiles, log)
+            inviteRoutes(store, invites, limiter, ::clientKey)
 
             webSocket("/ws") { handleSocket() }
         }
@@ -253,6 +259,7 @@ class FalaiServer(
                     deviceId = device.deviceId,
                     conversations = store.conversationsOf(device.user.id),
                     lastSeq = store.lastSeqFor(device.user.id),
+                    publicBase = invites.publicBase(),
                 )
             )
             for (frame in incoming) {
@@ -290,6 +297,7 @@ class FalaiServer(
         is ListUsersFrame -> f.requestId
         is CreateInviteFrame -> f.requestId
         is PingFrame -> f.requestId
+        is SetPublicAddressFrame -> f.requestId
         is SyncFrame -> null
     }
 
@@ -297,6 +305,13 @@ class FalaiServer(
         val device = conn.device
         when (f) {
             is PingFrame -> reply(PongFrame(f.requestId))
+
+            is SetPublicAddressFrame -> {
+                if (!device.user.isAdmin) throw FalaiException("forbidden", "Só o administrador muda o endereço.")
+                val base = invites.setAddress(f.address)
+                    ?: throw FalaiException("invalid", "Endereço inválido. Exemplo: falai.seudominio.com")
+                reply(PublicAddressFrame(f.requestId, base))
+            }
 
             is SendFrame -> {
                 val stored = store.storeMessage(device, f)
@@ -331,7 +346,7 @@ class FalaiServer(
             is CreateInviteFrame -> {
                 val (code, expires) = store.createInvite(device.user, f.forUserId)
                 log("Convite criado por ${device.user.name}")
-                reply(InviteFrame(f.requestId, code, expires))
+                reply(InviteFrame(f.requestId, code, expires, invites.linkFor(code)))
             }
         }
     }

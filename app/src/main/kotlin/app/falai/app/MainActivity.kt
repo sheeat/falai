@@ -1,6 +1,9 @@
 package app.falai.app
 
+import android.content.Intent
 import android.os.Bundle
+import android.widget.Toast
+import app.falai.protocol.InviteLinks
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -19,6 +22,26 @@ import app.falai.app.ui.NewConversationScreen
 import app.falai.app.ui.PairScreen
 
 class MainActivity : ComponentActivity() {
+    /** Convite que chegou por link (falai://convite?...), para preencher a tela de entrada. */
+    private val pendingInvite = mutableStateOf<InviteLinks.Parsed?>(null)
+
+    private fun readInvite(intent: Intent?) {
+        val data = intent?.dataString ?: return
+        val parsed = InviteLinks.parse(data) ?: return
+        val client = (application as FalaiApp).client
+        if (client.account.value != null) {
+            Toast.makeText(this, "Este aparelho já está conectado ao Falaí.", Toast.LENGTH_LONG).show()
+        } else {
+            pendingInvite.value = parsed
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        readInvite(intent)
+    }
+
     override fun onResume() {
         super.onResume()
         // Abriu o app: não espera o próximo intervalo de tentativa, conecta (e envia a fila) na hora.
@@ -29,11 +52,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val client = (application as FalaiApp).client
+        readInvite(intent)
         setContent {
             FalaiTheme {
                 val account by client.account.collectAsState()
                 if (account == null) {
-                    PairScreen(client)
+                    PairScreen(client, pendingInvite.value)
                 } else {
                     Navigation(client)
                 }

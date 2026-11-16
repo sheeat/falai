@@ -465,4 +465,72 @@ class FalaiClientTest {
         assertEquals("ARQUIVO", ClientStore.typeLabel("sem nome", "application/octet-stream"))
         assertEquals("MP4", ClientStore.typeLabel("x.mp4", "video/mp4"))
     }
+
+    @Test
+    fun `resposta do pareamento se perde no 4G e o app tenta de novo sem gastar o convite`() = runBlocking {
+        val (chefe, _, _) = family()
+        val code = chefe.createInvite(forUserId = chefe.account.value!!.userId).code
+        // "Ponte" que entrega o primeiro pedido ao servidor mas joga fora a resposta (como no 4G).
+        val ponte = java.net.ServerSocket(0)
+        var conexoes = 0
+        val t = Thread {
+            while (!ponte.isClosed) {
+                val entrada = try { ponte.accept() } catch (e: Exception) { break }
+                conexoes++
+                val primeira = conexoes == 1
+                Thread {
+                    entrada.use { e ->
+                        java.net.Socket("127.0.0.1", port).use { srv ->
+                            val ida = Thread { runCatching { e.getInputStream().copyTo(srv.getOutputStream()) } }.apply { start() }
+                            if (primeira) {
+                                // Espera o servidor responder e derruba sem repassar.
+                                runCatching { srv.getInputStream().read(ByteArray(4096)) }
+                            } else {
+                                runCatching { srv.getInputStream().copyTo(e.getOutputStream()) }
+                            }
+                            ida.interrupt()
+                        }
+                    }
+                }.start()
+            }
+        }.apply { isDaemon = true; start() }
+        try {
+            val pessoal = newClient("pessoal")
+            val acc = pessoal.pair("http://127.0.0.1:${ponte.localPort}", code, "Celular pessoal", null)
+            assertTrue(conexoes >= 2, "devia ter tentado de novo")
+            assertEquals(chefe.account.value!!.userId, acc.userId)
+            assertTrue(acc.isAdmin)
+        } finally {
+            ponte.close()
+            t.interrupt()
+        }
+    }
+
+    @Test
+    fun `admin deixa o app disponivel para download so quando e mais novo`() = runBlocking {
+        val (chefe, ana, _) = family()
+        val apk = File(dir, "app.apk").apply { writeBytes(byteArrayOf(0x50, 0x4B) + ByteArray(100_000) { 7 }) }
+        val v1 = chefe.publishAppIfNewer(apk, 6, "0.4.0")
+        assertEquals(6, v1?.versionCode)
+        // Mesma versão: não envia de novo (o arquivo no servidor não muda).
+        val outro = File(dir, "outro.apk").apply { writeBytes(byteArrayOf(0x50, 0x4B, 1, 2, 3)) }
+        assertEquals(100_002L, chefe.publishAppIfNewer(outro, 6, "0.4.0")?.size)
+        // Quem não é admin não envia.
+        assertEquals(null, ana.publishAppIfNewer(outro, 9, "9"))
+        // Versão nova: envia.
+        assertEquals(5L, chefe.publishAppIfNewer(outro, 7, "0.4.1")?.size)
+    }
+
+    @Test
+    fun `admin salva o endereco da internet e os outros aparelhos ficam sabendo`() = runBlocking {
+        val (chefe, ana, _) = family()
+        assertEquals(null, chefe.publicBase.value)
+        assertEquals("https://falai.falaifamilia.net", chefe.setPublicAddress("falai.falaifamilia.net"))
+        assertEquals("https://falai.falaifamilia.net", chefe.publicBase.value)
+        val erro = runCatching { ana.setPublicAddress("falai.outro.net") }.exceptionOrNull()
+        assertTrue(erro is FalaiClientException && erro.code == "forbidden", "$erro")
+        ana.reconnectNow(force = true)
+        eventually("Ana saber o endereço") { ana.publicBase.value == "https://falai.falaifamilia.net" }
+        assertEquals("https://falai.falaifamilia.net/convite/", chefe.createInvite().link!!.substringBeforeLast('/') + "/")
+    }
 }

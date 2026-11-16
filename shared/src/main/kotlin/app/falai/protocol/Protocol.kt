@@ -31,6 +31,12 @@ data class PairRequest(
     val deviceName: String,
     /** Nome da pessoa. Ignorado quando o convite é para adicionar aparelho a alguém que já existe. */
     val userName: String? = null,
+    /**
+     * Identificador desta tentativa, gerado pelo aparelho. Se a resposta se perder (internet
+     * oscilando) e o aparelho repetir o pedido com o mesmo código e o mesmo id, o servidor
+     * reconhece e responde de novo, em vez de dizer que o convite já foi usado.
+     */
+    val attemptId: String? = null,
 )
 
 @Serializable
@@ -100,6 +106,42 @@ private val BASE64_CHARS = Regex("^[A-Za-z0-9+/]+={0,2}$")
 fun sanitizeThumb(thumb: String?): String? =
     thumb?.takeIf { it.length in 4..MAX_THUMB_CHARS && BASE64_CHARS.matches(it) }
 
+// ---------- Convite por link ----------
+
+/**
+ * Link de convite e o "atalho" que abre o app já preenchido.
+ * Página: https://SERVIDOR/convite/CODIGO  ·  App: falai://convite?s=https://SERVIDOR&c=CODIGO
+ */
+object InviteLinks {
+    fun page(base: String, code: String) = "${base.trimEnd('/')}/convite/$code"
+
+    fun appUri(base: String, code: String, forExistingUser: Boolean = false): String =
+        "falai://convite?s=" + java.net.URLEncoder.encode(base.trimEnd('/'), "UTF-8") + "&c=" + code +
+            (if (forExistingUser) "&d=1" else "")
+
+    data class Parsed(val server: String, val code: String, val forExistingUser: Boolean)
+
+    /** Entende o link da página, o atalho do app ou um texto colado que contenha um deles. */
+    fun parse(text: String): Parsed? {
+        val t = text.trim()
+        Regex("""falai://convite\?([^\s]+)""").find(t)?.let { m ->
+            val params = m.groupValues[1].split('&').mapNotNull {
+                val i = it.indexOf('='); if (i <= 0) null else it.substring(0, i) to java.net.URLDecoder.decode(it.substring(i + 1), "UTF-8")
+            }.toMap()
+            val s = params["s"] ?: return null
+            val c = params["c"] ?: return null
+            return Parsed(s, c.uppercase(), params["d"] == "1")
+        }
+        Regex("""(https?://[A-Za-z0-9.\-]+(?::\d+)?)/convite/([A-Za-z0-9]+)""").find(t)?.let { m ->
+            return Parsed(m.groupValues[1], m.groupValues[2].uppercase(), false)
+        }
+        return null
+    }
+}
+
+@Serializable
+data class AppApkInfo(val versionCode: Long, val versionName: String, val size: Long)
+
 // ---------- Mídia (HTTP) ----------
 //
 //   POST /api/media                      MediaCreateRequest -> MediaStatus   (começa um envio)
@@ -158,6 +200,10 @@ data class CreateInviteFrame(
 @Serializable @SerialName("ping")
 data class PingFrame(val requestId: String) : ClientFrame
 
+/** Só o administrador: informa o endereço do Falaí na internet (ex.: falai.falaifamilia.net). */
+@Serializable @SerialName("set_public_address")
+data class SetPublicAddressFrame(val requestId: String, val address: String) : ClientFrame
+
 // ---------- Servidor -> cliente ----------
 
 @Serializable
@@ -170,6 +216,8 @@ data class HelloFrame(
     val deviceId: String,
     val conversations: List<ConversationDto>,
     val lastSeq: Long,
+    /** Endereço do servidor na internet (ex.: https://falai.falaifamilia.net), se já for conhecido. */
+    val publicBase: String? = null,
 ) : ServerFrame
 
 @Serializable @SerialName("ack")
@@ -191,7 +239,17 @@ data class ConversationFrame(val requestId: String? = null, val conversation: Co
 data class UsersFrame(val requestId: String, val users: List<UserDto>) : ServerFrame
 
 @Serializable @SerialName("invite")
-data class InviteFrame(val requestId: String, val code: String, val expiresAt: Long) : ServerFrame
+data class InviteFrame(
+    val requestId: String,
+    val code: String,
+    val expiresAt: Long,
+    /** Link para mandar pelo WhatsApp (https://.../convite/CODIGO). Null se o servidor ainda não sabe o próprio endereço. */
+    val link: String? = null,
+) : ServerFrame
+
+/** Resposta a [SetPublicAddressFrame]. */
+@Serializable @SerialName("public_address")
+data class PublicAddressFrame(val requestId: String, val publicBase: String) : ServerFrame
 
 @Serializable @SerialName("pong")
 data class PongFrame(val requestId: String) : ServerFrame

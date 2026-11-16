@@ -1,6 +1,7 @@
 package app.falai.client
 
 import app.falai.protocol.AckFrame
+import app.falai.protocol.AppApkInfo
 import app.falai.protocol.ClientFrame
 import app.falai.protocol.ConversationDto
 import app.falai.protocol.ConversationFrame
@@ -16,6 +17,8 @@ import app.falai.protocol.MessageFrame
 import app.falai.protocol.PairRequest
 import app.falai.protocol.PairResponse
 import app.falai.protocol.PongFrame
+import app.falai.protocol.PublicAddressFrame
+import app.falai.protocol.SetPublicAddressFrame
 import app.falai.protocol.SendFrame
 import app.falai.protocol.ServerFrame
 import app.falai.protocol.SyncBatchFrame
@@ -38,6 +41,7 @@ import kotlinx.coroutines.withTimeout
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
@@ -103,32 +107,85 @@ class FalaiClient(
 
     // ---------- Pareamento ----------
 
-    /** Troca o código de convite por uma conta neste aparelho. */
+    /** Um id de tentativa por código: repetir com o mesmo código reaproveita o id (ver PairRequest). */
+    private val pairAttempts = ConcurrentHashMap<String, String>()
+
+    /**
+     * Troca o código de convite por uma conta neste aparelho. Se a internet oscilar, tenta de novo
+     * sozinho; o servidor reconhece a repetição e o convite não se perde.
+     */
     suspend fun pair(serverUrl: String, code: String, deviceName: String, userName: String?): Account =
         withContext(Dispatchers.IO) {
             val base = normalizeUrl(serverUrl)
-            val body = FalaiJson.encodeToString(PairRequest.serializer(), PairRequest(code.trim(), deviceName, userName))
+            val cleanCode = code.trim()
+            val attemptId = pairAttempts.getOrPut(cleanCode.uppercase().filter { it.isLetterOrDigit() }) { UUID.randomUUID().toString() }
+            val body = FalaiJson.encodeToString(PairRequest.serializer(), PairRequest(cleanCode, deviceName, userName, attemptId))
             val req = Request.Builder()
                 .url("$base/api/pair")
                 .post(body.toRequestBody("application/json".toMediaType()))
                 .build()
-            val resp = try {
-                http.newCall(req).execute()
-            } catch (e: IOException) {
-                throw FalaiClientException("network", "Não consegui falar com o servidor. Confira o endereço e a internet.")
-            }
-            resp.use { r ->
-                val text = r.body?.string().orEmpty()
-                if (!r.isSuccessful) {
-                    val err = runCatching { FalaiJson.decodeFromString(ErrorResponse.serializer(), text) }.getOrNull()
-                    throw FalaiClientException(err?.error ?: "http_${r.code}", err?.message ?: "Erro do servidor (${r.code}).")
+            var lastError: IOException? = null
+            for (attempt in 0 until 3) {
+                if (attempt > 0) delay(1500L * attempt)
+                val resp = try {
+                    mediaHttp.newCall(req).execute()
+                } catch (e: IOException) {
+                    log("Pareamento: falha de rede (${e.message}), tentativa ${attempt + 1}")
+                    lastError = e
+                    continue
                 }
-                val p = FalaiJson.decodeFromString(PairResponse.serializer(), text)
-                val acc = Account(base, p.token, p.userId, p.deviceId, p.isAdmin)
-                store.saveAccount(acc)
-                _me.value = acc
-                bump()
-                acc
+                return@withContext resp.use { r ->
+                    val text = r.body?.string().orEmpty()
+                    if (!r.isSuccessful) {
+                        val err = runCatching { FalaiJson.decodeFromString(ErrorResponse.serializer(), text) }.getOrNull()
+                        throw FalaiClientException(err?.error ?: "http_${r.code}", err?.message ?: "Erro do servidor (${r.code}).")
+                    }
+                    val p = FalaiJson.decodeFromString(PairResponse.serializer(), text)
+                    val acc = Account(base, p.token, p.userId, p.deviceId, p.isAdmin)
+                    store.saveAccount(acc)
+                    _me.value = acc
+                    bump()
+                    acc
+                }
+            }
+            throw FalaiClientException(
+                "network",
+                "Não consegui falar com o servidor (${lastError?.message ?: "sem resposta"}). Confira o endereço e a internet e tente de novo com o mesmo código.",
+            )
+        }
+
+    // ---------- Arquivo do app (para quem for convidado baixar) ----------
+
+    /**
+     * Só o administrador: se o servidor não tem este app (ou tem um mais antigo), envia o arquivo.
+     * Devolve a versão que ficou no servidor, ou null se não deu.
+     */
+    suspend fun publishAppIfNewer(apk: java.io.File, versionCode: Long, versionName: String): AppApkInfo? =
+        withContext(Dispatchers.IO) {
+            val acc = store.account() ?: return@withContext null
+            if (!acc.isAdmin || !apk.exists()) return@withContext null
+            val current = runCatching {
+                mediaHttp.newCall(Request.Builder().url("${acc.serverUrl}/api/app-apk").build()).execute().use { r ->
+                    val t = r.body?.string().orEmpty().trim()
+                    if (!r.isSuccessful || t == "null" || t.isEmpty()) null
+                    else FalaiJson.decodeFromString(AppApkInfo.serializer(), t)
+                }
+            }.getOrNull()
+            if (current != null && current.versionCode >= versionCode) return@withContext current
+            val req = Request.Builder()
+                .url("${acc.serverUrl}/api/app-apk?versionCode=$versionCode&versionName=" + java.net.URLEncoder.encode(versionName, "UTF-8"))
+                .header("Authorization", "Bearer ${acc.token}")
+                .put(apk.asRequestBody("application/vnd.android.package-archive".toMediaType()))
+                .build()
+            try {
+                mediaHttp.newCall(req).execute().use { r ->
+                    val t = r.body?.string().orEmpty()
+                    if (!r.isSuccessful) { log("Envio do app falhou: ${r.code} $t"); null }
+                    else FalaiJson.decodeFromString(AppApkInfo.serializer(), t).also { log("App ${it.versionName} enviado ao servidor") }
+                }
+            } catch (e: IOException) {
+                log("Envio do app falhou: ${e.message}")
+                null
             }
         }
 
@@ -266,6 +323,7 @@ class FalaiClient(
                     store.saveAccount(updated)
                     _me.value = updated
                 }
+                _publicBase.value = f.publicBase
                 _connection.value = ConnectionState.ONLINE
                 sendFrame(ws, ListUsersFrame("hello-users"))
                 sendFrame(ws, SyncFrame(store.syncedSeq()))
@@ -294,6 +352,10 @@ class FalaiClient(
             }
             is InviteFrame -> pendingRequests.remove(f.requestId)?.complete(f)
             is PongFrame -> pendingRequests.remove(f.requestId)?.complete(f)
+            is PublicAddressFrame -> {
+                _publicBase.value = f.publicBase
+                pendingRequests.remove(f.requestId)?.complete(f)
+            }
             is ErrorFrame -> {
                 log("Erro do servidor: ${f.code} ${f.message}")
                 val waiting = f.requestId?.let { pendingRequests.remove(it) }
@@ -349,6 +411,16 @@ class FalaiClient(
     suspend fun createInvite(forUserId: String? = null): InviteFrame {
         val id = UUID.randomUUID().toString()
         return request(id, CreateInviteFrame(id, forUserId)) as InviteFrame
+    }
+
+    private val _publicBase = MutableStateFlow<String?>(null)
+    /** Endereço do Falaí na internet (ex.: https://falai.falaifamilia.net), se o servidor já souber. */
+    val publicBase: StateFlow<String?> = _publicBase.asStateFlow()
+
+    /** Só o administrador: informa o endereço do Falaí na internet. Devolve a base (https://...). */
+    suspend fun setPublicAddress(address: String): String {
+        val id = UUID.randomUUID().toString()
+        return (request(id, SetPublicAddressFrame(id, address)) as PublicAddressFrame).publicBase
     }
 
     suspend fun refreshUsers() {

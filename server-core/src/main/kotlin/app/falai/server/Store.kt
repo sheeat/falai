@@ -18,6 +18,13 @@ data class StoredMessage(val message: MessageDto, val isNew: Boolean)
 /**
  * Toda a persistência do servidor. A lógica SQL fica aqui, igual no PC e no Android.
  */
+/** Por quanto tempo um pareamento pode ser repetido com o mesmo id de tentativa. */
+/** Quanto tempo um convite vale (7 dias: dá tempo de a pessoa ver o WhatsApp e instalar). */
+const val INVITE_VALID_MS = 7 * 24 * 3600_000L
+
+/** Por quanto tempo um pareamento pode ser repetido com o mesmo id de tentativa. */
+const val PAIR_RETRY_WINDOW_MS = 30 * 60_000L
+
 class Store(private val db: Db, private val clock: () -> Long = System::currentTimeMillis) {
 
     private val random = SecureRandom()
@@ -108,6 +115,14 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
                 db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '2')")
             }
         }
+        if (version < 3) {
+            db.transaction {
+                // Pareamento que pode ser repetido com segurança se a resposta se perder.
+                db.execute("ALTER TABLE invites ADD COLUMN used_attempt_hash TEXT")
+                db.execute("ALTER TABLE invites ADD COLUMN used_device_id TEXT")
+                db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '3')")
+            }
+        }
     }
 
     // ---------- Utilidades ----------
@@ -130,6 +145,36 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
 
     private fun normalizeCode(code: String) = code.uppercase().filter { it.isLetterOrDigit() }
 
+    // ---------- Configurações guardadas ----------
+
+    fun getMeta(key: String): String? =
+        db.query("SELECT value FROM meta WHERE key = ?", key).firstOrNull()?.string("value")
+
+    fun setMeta(key: String, value: String) {
+        db.transaction {
+            db.update("DELETE FROM meta WHERE key = ?", key)
+            db.execute("INSERT INTO meta (key, value) VALUES (?, ?)", key, value)
+        }
+    }
+
+    /** O que a página do convite mostra. [status]: "ok", "used", "expired" ou "invalid". */
+    data class InvitePreview(val status: String, val inviterName: String?, val forUserName: String?)
+
+    fun invitePreview(code: String): InvitePreview {
+        val c = normalizeCode(code)
+        if (c.isEmpty() || c.length > 32) return InvitePreview("invalid", null, null)
+        val invite = db.query("SELECT * FROM invites WHERE code_hash = ?", sha256(c)).firstOrNull()
+            ?: return InvitePreview("invalid", null, null)
+        val inviter = invite.stringOrNull("created_by")?.let(::userById)?.name
+        val forUser = invite.stringOrNull("for_user_id")?.let(::userById)?.name
+        val status = when {
+            invite.longOrNull("used_at") != null -> "used"
+            invite.long("expires_at") < clock() -> "expired"
+            else -> "ok"
+        }
+        return InvitePreview(status, inviter, forUser)
+    }
+
     // ---------- Usuários e convites ----------
 
     fun hasUsers(): Boolean = db.query("SELECT 1 AS x FROM users LIMIT 1").isNotEmpty()
@@ -151,7 +196,7 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         code to expires
     }
 
-    fun createInvite(by: UserDto, forUserId: String?, validForMs: Long = 24 * 3600_000L): Pair<String, Long> {
+    fun createInvite(by: UserDto, forUserId: String?, validForMs: Long = INVITE_VALID_MS): Pair<String, Long> {
         if (!by.isAdmin) throw FalaiException("forbidden", "Só o administrador cria convites.")
         if (forUserId != null && userById(forUserId) == null) {
             throw FalaiException("not_found", "Pessoa não encontrada.")
@@ -173,7 +218,26 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
 
         val invite = db.query("SELECT * FROM invites WHERE code_hash = ?", sha256(code)).firstOrNull()
             ?: throw FalaiException("invalid_code", "Código de convite inválido.")
-        if (invite.longOrNull("used_at") != null) throw FalaiException("invalid_code", "Este convite já foi usado.")
+        val attemptHash = req.attemptId?.trim()?.takeIf { it.length in 8..64 }?.let(::sha256)
+        val usedAt = invite.longOrNull("used_at")
+        if (usedAt != null) {
+            // O mesmo aparelho repetindo o pedido (a resposta anterior se perdeu): responde de novo.
+            val sameAttempt = attemptHash != null && attemptHash == invite.stringOrNull("used_attempt_hash")
+            val deviceId = invite.stringOrNull("used_device_id")
+            if (sameAttempt && deviceId != null && clock() - usedAt <= PAIR_RETRY_WINDOW_MS) {
+                val row = db.query(
+                    """SELECT u.id AS user_id, u.is_admin AS is_admin FROM devices d JOIN users u ON u.id = d.user_id
+                       WHERE d.id = ? AND d.revoked_at IS NULL""",
+                    deviceId,
+                ).firstOrNull()
+                if (row != null) {
+                    val token = newToken()
+                    db.update("UPDATE devices SET token_hash = ? WHERE id = ?", sha256(token), deviceId)
+                    return@transaction PairResponse(row.string("user_id"), deviceId, token, row.bool("is_admin"))
+                }
+            }
+            throw FalaiException("invalid_code", "Este convite já foi usado.")
+        }
         if (invite.long("expires_at") < clock()) throw FalaiException("invalid_code", "Este convite expirou.")
 
         val now = clock()
@@ -198,7 +262,8 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
             deviceId, user.id, deviceName, sha256(token), now,
         )
         val changed = db.update(
-            "UPDATE invites SET used_at = ? WHERE code_hash = ? AND used_at IS NULL", now, sha256(code),
+            "UPDATE invites SET used_at = ?, used_attempt_hash = ?, used_device_id = ? WHERE code_hash = ? AND used_at IS NULL",
+            now, attemptHash, deviceId, sha256(code),
         )
         if (changed != 1) throw FalaiException("invalid_code", "Este convite já foi usado.")
 
