@@ -45,6 +45,7 @@ fun ConversationsScreen(
     val changes by client.changes.collectAsState()
     val state by client.connection.collectAsState()
     val account by client.account.collectAsState()
+    val lastError by client.lastError.collectAsState()
     val me = account?.userId ?: return
     val list = remember(changes) { client.store.conversationSummaries(me) }
 
@@ -66,6 +67,23 @@ fun ConversationsScreen(
                     }
                 }
                 ConnectionBadge(state)
+            }
+
+            // Quando algo não vai bem, mostra o motivo e um botão para tentar na hora.
+            val queued = remember(changes) { client.store.queuedCount() }
+            if (state != app.falai.client.ConnectionState.ONLINE || queued > 0) {
+                Row(
+                    Modifier.fillMaxWidth().background(FalaiColors.ChatBg).padding(horizontal = 16.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        if (queued > 0) Text("🕓 $queued na fila para enviar", fontSize = 13.sp)
+                        if (state != app.falai.client.ConnectionState.ONLINE) {
+                            Text(lastError ?: "Sem conexão com o servidor.", fontSize = 12.sp, color = FalaiColors.TextSec)
+                        }
+                    }
+                    TextButton(onClick = { client.reconnectNow() }) { Text("Reconectar") }
+                }
             }
 
             if (list.isEmpty()) {

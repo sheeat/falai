@@ -121,6 +121,13 @@ private suspend fun ApplicationCall.guard(block: suspend () -> Unit) {
         respondError(FalaiException("invalid", "Pedido mal formado."))
     } catch (e: IllegalArgumentException) {
         respondError(FalaiException("invalid", "Pedido mal formado."))
+    } catch (e: Exception) {
+        // Erro inesperado (ex.: cartão de memória cheio ou sem permissão): explica em vez de só "500".
+        System.err.println("[falai] Erro na mídia: $e")
+        respondJson(
+            FalaiJson.encodeToString(ErrorResponse.serializer(), ErrorResponse("server_error", "Erro no servidor: ${e.message ?: e.javaClass.simpleName}")),
+            HttpStatusCode.InternalServerError,
+        )
     }
 }
 

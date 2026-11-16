@@ -95,6 +95,9 @@ class Hub {
     }
 
     fun onlineDevices(userId: String): Int = byUser[userId]?.size ?: 0
+
+    /** Total de aparelhos conectados agora (para a tela do servidor). */
+    fun connectionCount(): Int = byUser.values.sumOf { it.size }
 }
 
 class FalaiServer(

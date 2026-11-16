@@ -61,6 +61,8 @@ class ServerService : Service() {
                 )
                 val adminCode = s.start(wait = false)
                 server = s
+                current = s
+                currentMediaDir = mediaDir.absolutePath
                 Status.update(this, running = true, adminCode = adminCode, error = null)
                 notify(if (adminCode != null) "Ligado · código do admin: $adminCode" else "Ligado na porta $PORT")
             } catch (t: Throwable) {
@@ -76,6 +78,7 @@ class ServerService : Service() {
     override fun onDestroy() {
         server?.stop()
         server = null
+        current = null
         wakeLock?.release()
         Status.update(this, running = false, adminCode = null, error = null)
         super.onDestroy()
@@ -108,6 +111,10 @@ class ServerService : Service() {
     companion object {
         const val TAG = "FalaiServer"
         const val PORT = 8443
+
+        /** O servidor rodando agora (para a tela mostrar aparelhos conectados). */
+        @Volatile var current: FalaiServer? = null
+        @Volatile var currentMediaDir: String? = null
         private const val CHANNEL = "server"
         private const val NOTIF_ID = 1
 

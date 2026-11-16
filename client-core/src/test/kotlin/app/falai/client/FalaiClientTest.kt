@@ -55,10 +55,15 @@ class FalaiClientTest {
         dir.deleteRecursively()
     }
 
-    private fun newClient(name: String): FalaiClient {
+    private fun newClient(
+        name: String,
+        delays: List<Long> = listOf(100, 200, 300),
+        handshakeTimeoutMs: Long = 20_000,
+    ): FalaiClient {
         val c = FalaiClient(
             ClientStore(JdbcDb(File(dir, "$name.db").path)), scope, File(dir, "$name-media"),
-            reconnectDelaysMs = listOf(100, 200, 300),
+            reconnectDelaysMs = delays,
+            handshakeTimeoutMs = handshakeTimeoutMs,
         )
         clients += c
         return c
@@ -337,5 +342,78 @@ class FalaiClientTest {
         bruno.pair(url, chefe.createInvite().code, "Celular", "Bruno")
         val e = assertFailsWith<FalaiClientException> { bruno.mediaFile(att) }
         assertEquals("http_404", e.code)
+    }
+
+    // ---------- Reconexão (problemas vistos no teste no celular) ----------
+
+    @Test
+    fun `servidor que aceita a conexao mas nao responde nao prende o app`() = runBlocking {
+        // Imita a "ponte" do cabo meio caída: aceita a conexão e fica mudo.
+        val mudo = java.net.ServerSocket(0)
+        val aceitas = mutableListOf<java.net.Socket>()
+        val t = Thread { try { while (true) aceitas += mudo.accept() } catch (_: Exception) {} }.apply { isDaemon = true; start() }
+        try {
+            val c = newClient("x", delays = listOf(100), handshakeTimeoutMs = 500)
+            c.store.saveAccount(Account("http://127.0.0.1:${mudo.localPort}", "t", "u", "d", false))
+            c.start()
+            eventually("conectando") { c.connection.value == ConnectionState.CONNECTING }
+            eventually("desistir e avisar") { c.lastError.value?.contains("não respondeu") == true }
+            eventually("tentar de novo") { aceitas.size >= 2 }
+        } finally {
+            mudo.close()
+            aceitas.forEach { it.close() }
+            t.interrupt()
+        }
+    }
+
+    @Test
+    fun `reconectar agora nao espera os 30 segundos`() = runBlocking {
+        val (chefe, ana, conv) = family()
+        ana.stop()
+        val samePort = port
+        server.stop()
+
+        // Ana volta a tentar com espera longa (como depois de muitas falhas no celular).
+        val ana2 = FalaiClient(ana.store, scope, File(dir, "ana-media"), reconnectDelaysMs = listOf(60_000))
+        clients += ana2
+        ana2.send(conv, "Ola")
+        ana2.start()
+        eventually("Ana desistir da primeira tentativa") { ana2.connection.value == ConnectionState.OFFLINE }
+        assertTrue(ana2.lastError.value != null)
+
+        startServer(samePort)
+        delay(300)
+        assertEquals(ConnectionState.OFFLINE, ana2.connection.value) // ainda esperando os 60s
+        ana2.reconnectNow() // app aberto / internet voltou / botão "Reconectar"
+        eventually("Ana online na hora") { ana2.connection.value == ConnectionState.ONLINE }
+        assertEquals(null, ana2.lastError.value)
+        eventually("Chefe receber o Ola") { bodies(chefe, conv) == listOf("Ola") }
+        assertEquals(0, ana2.store.queuedCount())
+    }
+
+    @Test
+    fun `cenario do teste no celular - servidor reinstalado com arquivos e ola na fila`() = runBlocking {
+        val (chefe, ana, conv) = family()
+        val samePort = port
+        // Servidor reinstalado (fora do ar) e Ana sem "ponte".
+        server.stop()
+        eventually("os dois caírem") {
+            chefe.connection.value != ConnectionState.ONLINE && ana.connection.value != ConnectionState.ONLINE
+        }
+        val audio = randomFile("a.m4a", 300_000, 9)
+        val pdf = randomFile("b.pdf", 9 * 1024 * 1024, 10) // 2 pedaços
+        chefe.sendMedia(conv, audio, "audio", "audio/mp4", durationMs = 5_000)
+        chefe.sendMedia(conv, pdf, "file", "application/pdf")
+        ana.send(conv, "Ola")
+        assertEquals(2, chefe.store.queuedCount())
+        assertEquals(1, ana.store.queuedCount())
+
+        startServer(samePort)
+        listOf(chefe, ana).forEach { it.reconnectNow() }
+        eventually("Ana receber os dois arquivos") { ana.store.messages(conv).count { it.attachment != null } == 2 }
+        eventually("Chefe receber o Ola") { bodies(chefe, conv).contains("Ola") }
+        eventually("filas vazias") { chefe.store.queuedCount() == 0 && ana.store.queuedCount() == 0 }
+        val recebido = ana.store.messages(conv).first { it.attachment?.kind == "file" }.attachment!!
+        kotlin.test.assertContentEquals(pdf.readBytes(), ana.mediaFile(recebido).readBytes())
     }
 }

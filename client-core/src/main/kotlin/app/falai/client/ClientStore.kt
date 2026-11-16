@@ -261,6 +261,10 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
         messageById(id)!!
     }
 
+    /** Quantas mensagens deste aparelho ainda estão na fila (🕓). */
+    fun queuedCount(): Int =
+        db.query("SELECT COUNT(*) AS n FROM messages WHERE status = 'PENDING'").first().long("n").toInt()
+
     fun messageById(id: String): LocalMessage? =
         db.query("SELECT * FROM messages WHERE id = ?", id).firstOrNull()?.let(::rowToMessage)
 

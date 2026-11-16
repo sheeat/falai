@@ -95,9 +95,16 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
     fun sendCopied(c: CopiedFile?) {
         if (c == null) return
         val kind = kindForMime(c.mime)
-        val dur = if (kind == "video" || kind == "audio") durationMs(c.file) else null
-        client.sendMedia(conversationId, c.file, kind, c.mime, c.name, dur, caption = text)
+        val caption = text
         text = ""
+        scope.launch {
+            try {
+                val dur = withContext(Dispatchers.IO) { if (kind == "video" || kind == "audio") durationMs(c.file) else null }
+                client.sendMedia(conversationId, c.file, kind, c.mime, c.name, dur, caption = caption)
+            } catch (e: Exception) {
+                Toast.makeText(context, e.message ?: "Não consegui enviar o arquivo.", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     fun copyAndSend(uri: android.net.Uri?) {
@@ -203,10 +210,12 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
                     val f = recorder.stop()
                     recording = false
                     if (f != null) {
-                        client.sendMedia(
-                            conversationId, f, "audio", "audio/mp4", "audio.m4a",
-                            durationMs = durationMs(f) ?: (System.currentTimeMillis() - started),
-                        )
+                        scope.launch {
+                            client.sendMedia(
+                                conversationId, f, "audio", "audio/mp4", "audio.m4a",
+                                durationMs = durationMs(f) ?: (System.currentTimeMillis() - started),
+                            )
+                        }
                     } else {
                         Toast.makeText(context, "Áudio curto demais.", Toast.LENGTH_SHORT).show()
                     }

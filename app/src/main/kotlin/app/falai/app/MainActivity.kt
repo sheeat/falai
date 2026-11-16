@@ -19,6 +19,12 @@ import app.falai.app.ui.NewConversationScreen
 import app.falai.app.ui.PairScreen
 
 class MainActivity : ComponentActivity() {
+    override fun onResume() {
+        super.onResume()
+        // Abriu o app: não espera o próximo intervalo de tentativa, conecta (e envia a fila) na hora.
+        (application as FalaiApp).client.reconnectNow()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

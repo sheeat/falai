@@ -65,7 +65,26 @@ class FalaiClient(
     private val http: OkHttpClient = defaultHttp(),
     private val log: (String) -> Unit = {},
     private val reconnectDelaysMs: List<Long> = listOf(1_000, 2_000, 5_000, 10_000, 30_000),
+    /** Se o servidor não disser "olá" nesse tempo, a tentativa é abandonada e refeita. */
+    private val handshakeTimeoutMs: Long = 20_000,
 ) {
+    /** Conexões HTTP comuns (envio e download de arquivos) não podem ficar presas para sempre. */
+    private val mediaHttp: OkHttpClient = http.newBuilder()
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .build()
+
+    /** Acorda a espera entre tentativas (internet voltou, app abriu, botão "Reconectar"). */
+    private val wake = Channel<Unit>(Channel.CONFLATED)
+    private val uploadWake = Channel<Unit>(Channel.CONFLATED)
+
+    private val _lastError = MutableStateFlow<String?>(null)
+    /** Último problema de conexão ou de envio, para mostrar na tela. Some quando volta a funcionar. */
+    val lastError: StateFlow<String?> = _lastError.asStateFlow()
+
+    private suspend fun sleepOrWake(ms: Long, channel: Channel<Unit>) {
+        kotlinx.coroutines.withTimeoutOrNull(ms) { channel.receive() }
+    }
     private val _connection = MutableStateFlow(ConnectionState.OFFLINE)
     val connection: StateFlow<ConnectionState> = _connection.asStateFlow()
 
@@ -130,7 +149,7 @@ class FalaiClient(
                 }
                 _connection.value = ConnectionState.OFFLINE
                 if (result == SessionEnd.WAS_ONLINE) attempt = 0
-                delay(reconnectDelaysMs[minOf(attempt, reconnectDelaysMs.lastIndex)])
+                sleepOrWake(reconnectDelaysMs[minOf(attempt, reconnectDelaysMs.lastIndex)], wake)
                 attempt++
             }
         }
@@ -146,7 +165,9 @@ class FalaiClient(
 
     /** Força uma reconexão imediata (ex.: a internet voltou). */
     fun reconnectNow() {
-        socket?.cancel()
+        if (_connection.value != ConnectionState.ONLINE) socket?.cancel()
+        wake.trySend(Unit)
+        uploadWake.trySend(Unit)
     }
 
     private enum class SessionEnd { FAILED, WAS_ONLINE, UNAUTHORIZED }
@@ -159,6 +180,7 @@ class FalaiClient(
 
     private suspend fun runSession(acc: Account): SessionEnd {
         val events = Channel<Event>(Channel.UNLIMITED)
+        val timedOut = java.util.concurrent.atomic.AtomicBoolean(false)
         val req = Request.Builder()
             .url("${acc.serverUrl}/ws")
             .header("Authorization", "Bearer ${acc.token}")
@@ -172,11 +194,25 @@ class FalaiClient(
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { events.trySend(Event.Closed(code)) }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 log("Falha na conexão: ${t.message}")
+                if (!timedOut.get()) {
+                    _lastError.value = "Não consegui falar com o servidor (${t.message ?: t.javaClass.simpleName})."
+                }
                 events.trySend(Event.Failed)
             }
         })
         socket = ws
         var wasOnline = false
+        // Se a conexão abrir mas o servidor nunca responder (ex.: "ponte" do cabo meio caída),
+        // não fica preso em "conectando…" para sempre.
+        val watchdog = scope.launch {
+            delay(handshakeTimeoutMs)
+            if (!wasOnline) {
+                timedOut.set(true)
+                log("Servidor não respondeu em ${handshakeTimeoutMs / 1000}s; tentando de novo")
+                _lastError.value = "O servidor não respondeu. Tentando de novo…"
+                ws.cancel()
+            }
+        }
         try {
             for (ev in events) {
                 when (ev) {
@@ -187,7 +223,10 @@ class FalaiClient(
                             log("Quadro desconhecido ignorado")
                             continue
                         }
-                        if (frame is HelloFrame) wasOnline = true
+                        if (frame is HelloFrame) {
+                            wasOnline = true
+                            _lastError.value = null
+                        }
                         handle(acc, ws, frame)
                     }
                     is Event.Closed -> return when {
@@ -200,6 +239,7 @@ class FalaiClient(
             }
             return SessionEnd.FAILED
         } finally {
+            watchdog.cancel()
             ws.cancel()
             if (socket === ws) socket = null
             // Pedidos sem resposta falham na hora, em vez de esperar o tempo todo.
@@ -326,7 +366,7 @@ class FalaiClient(
      * Envia um arquivo que já está na pasta do app. A mensagem aparece na hora com o relógio;
      * o arquivo sobe em pedaços e, quando termina, a mensagem é enviada.
      */
-    fun sendMedia(
+    suspend fun sendMedia(
         conversationId: String,
         file: java.io.File,
         kind: String,
@@ -334,7 +374,7 @@ class FalaiClient(
         name: String = file.name,
         durationMs: Long? = null,
         caption: String = "",
-    ): LocalMessage {
+    ): LocalMessage = withContext(Dispatchers.IO) {
         val acc = store.account() ?: throw FalaiClientException("not_paired", "Aparelho não pareado.")
         require(file.exists() && file.length() > 0) { "Arquivo vazio" }
         if (file.length() > app.falai.protocol.MEDIA_MAX_BYTES) {
@@ -347,12 +387,15 @@ class FalaiClient(
         val m = store.insertPendingMedia(UUID.randomUUID().toString(), conversationId, acc.userId, caption.trim(), att, file.path)
         bump()
         kickUploads()
-        return m
+        m
     }
 
     /** Começa (ou continua) a subir os arquivos da fila, um por vez. */
     fun kickUploads() {
-        if (uploadJob?.isActive == true) return
+        if (uploadJob?.isActive == true) {
+            uploadWake.trySend(Unit)
+            return
+        }
         uploadJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 val next = store.outgoingToUpload().firstOrNull() ?: break
@@ -361,6 +404,7 @@ class FalaiClient(
                     true
                 } catch (e: FalaiClientException) {
                     log("Envio de arquivo falhou: ${e.code} ${e.message}")
+                    _lastError.value = "Envio de arquivo: ${e.message}"
                     if (e.code == "not_found") {
                         // O servidor não conhece mais esse envio: recomeça do zero.
                         store.resetOutgoingMediaId(next.messageId)
@@ -372,11 +416,12 @@ class FalaiClient(
                     } else false
                 } catch (e: IOException) {
                     log("Envio de arquivo interrompido: ${e.message}")
+                    _lastError.value = "Arquivo esperando conexão para subir (${e.message ?: "sem rede"})."
                     false
                 }
                 if (!ok) {
                     // Sem conexão: tenta de novo daqui a pouco (ou quando reconectar).
-                    delay(reconnectDelaysMs.last())
+                    sleepOrWake(reconnectDelaysMs.last(), uploadWake)
                 }
             }
         }
@@ -385,11 +430,11 @@ class FalaiClient(
     private fun authed(b: Request.Builder, acc: Account) = b.header("Authorization", "Bearer ${acc.token}")
 
     private fun <T> call(req: Request, parse: (String) -> T): T {
-        http.newCall(req).execute().use { r ->
+        mediaHttp.newCall(req).execute().use { r ->
             val text = r.body?.string().orEmpty()
             if (!r.isSuccessful) {
                 val err = runCatching { FalaiJson.decodeFromString(ErrorResponse.serializer(), text) }.getOrNull()
-                if (r.code >= 500 || err == null) throw IOException("HTTP ${r.code}")
+                if (r.code >= 500 || err == null) throw IOException(err?.message ?: "HTTP ${r.code}")
                 throw FalaiClientException(err.error, err.message)
             }
             return parse(text)
@@ -466,7 +511,7 @@ class FalaiClient(
             val tmp = java.io.File(mediaDir, att.mediaId + ".download")
             val req = authed(Request.Builder().url("${acc.serverUrl}/api/media/${att.mediaId}"), acc).build()
             val resp = try {
-                http.newCall(req).execute()
+                mediaHttp.newCall(req).execute()
             } catch (e: IOException) {
                 throw FalaiClientException("network", "Sem conexão para baixar o arquivo.")
             }

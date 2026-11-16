@@ -63,6 +63,8 @@ class MainActivity : Activity() {
         val battery = if (pm.isIgnoringBatteryOptimizations(packageName)) "liberada" else "OTIMIZADA (pode desligar o servidor)"
         status.text = buildString {
             appendLine(if (running) "✅ Servidor ligado em 127.0.0.1:${ServerService.PORT}" else "⛔ Servidor desligado")
+            ServerService.current?.let { appendLine("📱 Aparelhos conectados agora: ${it.hub.connectionCount()}") }
+            ServerService.currentMediaDir?.let { appendLine("🗂️ Arquivos em: $it") }
             if (adminCode != null) {
                 appendLine()
                 appendLine("Código do administrador (vale 24h):")
