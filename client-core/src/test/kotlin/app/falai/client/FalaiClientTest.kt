@@ -422,13 +422,47 @@ class FalaiClientTest {
         val (chefe, ana, conv) = family()
         chefe.send(conv, "antes")
         eventually("Ana receber") { bodies(ana, conv) == listOf("antes") }
+        val conexoesAntes = server.recentEvents().count { it.contains("Conectado") }
         chefe.reconnectNow(force = true)
-        eventually("Chefe cair") { chefe.connection.value != ConnectionState.ONLINE }
+        // A reconexão é tão rápida que nem dá para ver o "offline": confere pelo servidor.
+        eventually("Chefe reconectar") { server.recentEvents().count { it.contains("Conectado") } > conexoesAntes }
         eventually("Chefe voltar") { chefe.connection.value == ConnectionState.ONLINE }
         chefe.send(conv, "depois")
         eventually("Ana receber depois") { bodies(ana, conv) == listOf("antes", "depois") }
         eventually("servidor ver 2 aparelhos") { server.hub.connectionCount() == 2 }
         assertEquals(2, server.hub.connectedNames().size)
         assertTrue(server.recentEvents().any { it.contains("Conectado") })
+    }
+
+    @Test
+    fun `miniatura vai junto e quem recebe ve a previa antes de baixar`() = runBlocking {
+        val (chefe, ana, conv) = family()
+        val foto = randomFile("foto.jpg", 50_000, 21)
+        val thumb = java.util.Base64.getEncoder().encodeToString(ByteArray(3000) { it.toByte() })
+        chefe.sendMedia(conv, foto, "image", "image/jpeg", thumb = thumb)
+        val video = randomFile("v.mp4", 60_000, 22)
+        chefe.sendMedia(conv, video, "video", "video/mp4", durationMs = 15_000, thumb = "nao e base64!!")
+        val grande = "A".repeat(app.falai.protocol.MAX_THUMB_CHARS + 4)
+        chefe.sendMedia(conv, randomFile("g.png", 1000, 23), "image", "image/png", thumb = grande)
+        eventually("Ana receber os 3") { ana.store.messages(conv).count { it.attachment != null } == 3 }
+        val recebidos = ana.store.messages(conv).mapNotNull { it.attachment }
+        assertEquals(thumb, recebidos.first { it.name == "foto.jpg" }.thumb)
+        assertEquals(null, recebidos.first { it.name == "v.mp4" }.thumb) // inválida: descartada
+        assertEquals(null, recebidos.first { it.name == "g.png" }.thumb) // grande demais: descartada
+        // A prévia já está lá, mas o arquivo em si ainda não foi baixado.
+        assertTrue(ana.store.messages(conv).all { it.localPath == null })
+    }
+
+    @Test
+    fun `tipo do arquivo aparece pela extensao ou pelo mime`() {
+        assertEquals("APK", ClientStore.typeLabel("Oxy Proxy Manager_1.0.4.apk", "application/vnd.android.package-archive"))
+        assertEquals("APK", ClientStore.typeLabel("arquivo", "application/vnd.android.package-archive"))
+        assertEquals("JPG", ClientStore.typeLabel("IMG_2026.jpeg", "image/jpeg"))
+        assertEquals("JPG", ClientStore.typeLabel("1000012345", "image/jpeg"))
+        assertEquals("PDF", ClientStore.typeLabel("boleto", "application/pdf"))
+        assertEquals("MOV", ClientStore.typeLabel("video", "video/quicktime"))
+        assertEquals("HEIC", ClientStore.typeLabel("foto", "image/heic"))
+        assertEquals("ARQUIVO", ClientStore.typeLabel("sem nome", "application/octet-stream"))
+        assertEquals("MP4", ClientStore.typeLabel("x.mp4", "video/mp4"))
     }
 }

@@ -310,8 +310,8 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
             if (!m.complete) throw FalaiException("invalid", "O anexo ainda não terminou de subir.")
             if (m.uploaderId != device.user.id) throw FalaiException("forbidden", "Anexo de outra pessoa.")
             if (!a.kind.matches(Regex("image|video|audio|file"))) throw FalaiException("invalid", "Tipo de anexo inválido.")
-            // Os dados confiáveis vêm do servidor; do cliente só o tipo e a duração.
-            a.copy(mime = m.mime, name = m.name, size = m.size, sha256 = m.sha256)
+            // Os dados confiáveis vêm do servidor; do cliente só o tipo, a duração e a miniatura.
+            a.copy(mime = m.mime, name = m.name, size = m.size, sha256 = m.sha256, thumb = sanitizeThumb(a.thumb))
         }
         val now = clock()
         val seq = db.insert(

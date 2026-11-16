@@ -377,6 +377,8 @@ class FalaiClient(
         name: String = file.name,
         durationMs: Long? = null,
         caption: String = "",
+        /** Miniatura JPEG em base64 (fotos e vídeos). Quem recebe vê a prévia antes de baixar. */
+        thumb: String? = null,
     ): LocalMessage = withContext(Dispatchers.IO) {
         val acc = store.account() ?: throw FalaiClientException("not_paired", "Aparelho não pareado.")
         require(file.exists() && file.length() > 0) { "Arquivo vazio" }
@@ -386,6 +388,7 @@ class FalaiClient(
         val att = app.falai.protocol.AttachmentDto(
             mediaId = "", kind = kind, mime = mime, name = name,
             size = file.length(), sha256 = sha256Hex(file), durationMs = durationMs,
+            thumb = app.falai.protocol.sanitizeThumb(thumb),
         )
         val m = store.insertPendingMedia(UUID.randomUUID().toString(), conversationId, acc.userId, caption.trim(), att, file.path)
         bump()

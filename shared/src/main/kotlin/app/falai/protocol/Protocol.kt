@@ -84,7 +84,21 @@ data class AttachmentDto(
     /** SHA-256 do arquivo original, em hexadecimal. Garante que chegou idêntico. */
     val sha256: String,
     val durationMs: Long? = null,
+    /**
+     * Miniatura pequena (JPEG em base64) de fotos e vídeos, para quem recebe ver a prévia
+     * antes de baixar, como nos outros mensageiros. No máximo [MAX_THUMB_CHARS] caracteres.
+     */
+    val thumb: String? = null,
 )
+
+/** Tamanho máximo da miniatura em base64 (cerca de 18 KB de JPEG). */
+const val MAX_THUMB_CHARS = 24_000
+
+private val BASE64_CHARS = Regex("^[A-Za-z0-9+/]+={0,2}$")
+
+/** A miniatura só é aceita se for pequena e parecer base64; senão, é descartada. */
+fun sanitizeThumb(thumb: String?): String? =
+    thumb?.takeIf { it.length in 4..MAX_THUMB_CHARS && BASE64_CHARS.matches(it) }
 
 // ---------- Mídia (HTTP) ----------
 //

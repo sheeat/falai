@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
 import android.graphics.Matrix
 import android.media.ExifInterface
 import android.media.MediaMetadataRetriever
@@ -83,7 +84,24 @@ fun openExternally(context: Context, file: File, mime: String) {
  * Miniatura só para mostrar na conversa (o arquivo original não é tocado).
  * Respeita a rotação gravada pela câmera.
  */
-fun loadThumbnail(file: File, maxSide: Int = 1024): Bitmap? = try {
+/**
+ * Abre a foto em tamanho reduzido para mostrar na tela. Usa o decodificador moderno do Android
+ * (entende HEIC, WebP, AVIF e a rotação da câmera); se falhar, tenta o antigo.
+ */
+fun loadThumbnail(file: File, maxSide: Int = 1024): Bitmap? =
+    try {
+        ImageDecoder.decodeBitmap(ImageDecoder.createSource(file)) { decoder, info, _ ->
+            val w = info.size.width
+            val h = info.size.height
+            val scale = maxSide.toFloat() / maxOf(w, h)
+            if (scale < 1f) decoder.setTargetSize(maxOf(1, (w * scale).toInt()), maxOf(1, (h * scale).toInt()))
+            decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+        }
+    } catch (e: Exception) {
+        null
+    } ?: legacyThumbnail(file, maxSide)
+
+private fun legacyThumbnail(file: File, maxSide: Int): Bitmap? = try {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeFile(file.path, bounds)
     var sample = 1
@@ -102,14 +120,61 @@ fun loadThumbnail(file: File, maxSide: Int = 1024): Bitmap? = try {
     null
 }
 
-fun videoThumbnail(file: File): Bitmap? = try {
+/** Um quadro do vídeo para servir de capa. */
+fun videoThumbnail(file: File, maxSide: Int = 1024): Bitmap? = try {
     MediaMetadataRetriever().run {
         try {
             setDataSource(file.path)
-            getFrameAtTime(0)
+            val frame = getFrameAtTime(1_000_000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                ?: getFrameAtTime(0)
+                ?: getFrameAtTime(-1)
+            frame?.let { scaleDown(it, maxSide) }
         } finally {
             release()
         }
+    }
+} catch (e: Exception) {
+    null
+}
+
+private fun scaleDown(b: Bitmap, maxSide: Int): Bitmap {
+    val scale = maxSide.toFloat() / maxOf(b.width, b.height)
+    if (scale >= 1f) return b
+    return Bitmap.createScaledBitmap(b, maxOf(1, (b.width * scale).toInt()), maxOf(1, (b.height * scale).toInt()), true)
+}
+
+/**
+ * Miniatura bem pequena (JPEG em base64) que vai junto com a mensagem, para quem recebe
+ * ver a prévia antes de baixar. Devolve null se não der para gerar.
+ */
+fun inlineThumb(file: File, kind: String): String? = try {
+    val big = when (kind) {
+        "image" -> loadThumbnail(file, 320)
+        "video" -> videoThumbnail(file, 320)
+        else -> null
+    }
+    big?.let { bmp ->
+        val small = scaleDown(bmp, 320)
+        var quality = 70
+        var bytes: ByteArray
+        do {
+            val out = java.io.ByteArrayOutputStream()
+            small.compress(Bitmap.CompressFormat.JPEG, quality, out)
+            bytes = out.toByteArray()
+            quality -= 15
+        } while (bytes.size > 17_000 && quality >= 25)
+        android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+            .takeIf { it.length <= app.falai.protocol.MAX_THUMB_CHARS }
+    }
+} catch (e: Exception) {
+    null
+}
+
+/** Abre a miniatura que veio junto com a mensagem. */
+fun decodeInlineThumb(b64: String?): Bitmap? = try {
+    b64?.let {
+        val bytes = android.util.Base64.decode(it, android.util.Base64.DEFAULT)
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
     }
 } catch (e: Exception) {
     null

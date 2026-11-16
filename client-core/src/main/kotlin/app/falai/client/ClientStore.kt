@@ -352,6 +352,26 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
             return if (body.isBlank()) label else "$label · $body"
         }
 
+        /**
+         * Tipo do arquivo em poucas letras, para mostrar na conversa: "JPG", "MP4", "APK", "PDF"…
+         * Usa a extensão do nome; se não tiver, deduz pelo tipo (mime).
+         */
+        fun typeLabel(name: String, mime: String): String {
+            val ext = name.substringAfterLast('.', "").takeIf { name.contains('.') && it.length in 1..5 && it.all(Char::isLetterOrDigit) }
+            if (ext != null) return ext.uppercase().let { if (it == "JPEG") "JPG" else it }
+            val full = mime.substringAfter('/', "").substringBefore(';').trim().lowercase()
+            if (full.isEmpty() || full == "octet-stream") return "ARQUIVO"
+            val sub = full.substringAfterLast('.').substringAfterLast('-')
+            return when (sub) {
+                "jpeg" -> "JPG"
+                "quicktime" -> "MOV"
+                "mpeg" -> if (mime.startsWith("audio/")) "MP3" else "MPG"
+                "plain" -> "TXT"
+                "archive" -> "APK"
+                else -> sub.uppercase().take(5)
+            }
+        }
+
         fun formatDuration(ms: Long): String {
             val s = ms / 1000
             return "%d:%02d".format(s / 60, s % 60)

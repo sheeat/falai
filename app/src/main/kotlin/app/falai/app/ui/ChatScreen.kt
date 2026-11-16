@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
@@ -99,8 +100,12 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
         text = ""
         scope.launch {
             try {
-                val dur = withContext(Dispatchers.IO) { if (kind == "video" || kind == "audio") durationMs(c.file) else null }
-                client.sendMedia(conversationId, c.file, kind, c.mime, c.name, dur, caption = caption)
+                val (dur, thumb) = withContext(Dispatchers.IO) {
+                    val d = if (kind == "video" || kind == "audio") durationMs(c.file) else null
+                    val t = if (kind == "image" || kind == "video") inlineThumb(c.file, kind) else null
+                    d to t
+                }
+                client.sendMedia(conversationId, c.file, kind, c.mime, c.name, dur, caption = caption, thumb = thumb)
             } catch (e: Exception) {
                 Toast.makeText(context, e.message ?: "Não consegui enviar o arquivo.", Toast.LENGTH_LONG).show()
             }
@@ -353,36 +358,59 @@ private fun AttachmentView(client: FalaiClient, m: LocalMessage) {
     when (att.kind) {
         "image", "video" -> {
             val f = file
-            var thumb by remember(f) { mutableStateOf<Bitmap?>(null) }
+            val isVideo = att.kind == "video"
+            // Prévia: primeiro a miniatura que veio junto com a mensagem (aparece na hora);
+            // depois que o arquivo é baixado, a imagem em boa qualidade.
+            val inline = remember(att.thumb) { decodeInlineThumb(att.thumb) }
+            var full by remember(f) { mutableStateOf<Bitmap?>(null) }
             LaunchedEffect(f) {
-                if (f != null) thumb = withContext(Dispatchers.IO) {
-                    if (att.kind == "image") loadThumbnail(f) else videoThumbnail(f)
+                if (f != null) full = withContext(Dispatchers.IO) {
+                    if (isVideo) videoThumbnail(f) else loadThumbnail(f)
                 }
             }
+            val shown = full ?: inline
+            val ratio = shown?.let { (it.width.toFloat() / it.height).coerceIn(0.6f, 1.8f) } ?: 1.4f
             Box(
                 Modifier
                     .width(260.dp)
-                    .heightIn(min = 140.dp, max = 340.dp)
+                    .aspectRatio(ratio)
                     .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFFDDD6CF))
+                    .background(Color(0xFF3A3330))
                     .clickable { if (f != null) openExternally(context, f, att.mime) else download(true) },
                 contentAlignment = Alignment.Center,
             ) {
-                val t = thumb
-                if (t != null) {
+                if (shown != null) {
                     Image(
-                        t.asImageBitmap(), contentDescription = if (att.kind == "image") "Foto" else "Vídeo",
-                        contentScale = ContentScale.Crop, modifier = Modifier.fillMaxWidth().heightIn(max = 340.dp),
+                        shown.asImageBitmap(), contentDescription = if (isVideo) "Vídeo" else "Foto",
+                        contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
                     )
+                } else {
+                    Text(if (isVideo) "🎥" else "📷", fontSize = 40.sp)
                 }
+                // Botão no meio: baixar, carregando ou "play" do vídeo.
                 when {
-                    downloading -> CircularProgressIndicator(Modifier.size(36.dp), color = FalaiColors.Primary)
-                    f == null -> Text(
-                        (if (att.kind == "image") "📷" else "🎥") + "  Toque para baixar\n" + formatSize(att.size),
-                        color = FalaiColors.TextSec, fontSize = 13.sp,
-                    )
-                    att.kind == "video" -> Text("▶", color = Color.White, fontSize = 40.sp)
+                    downloading -> CircularProgressIndicator(Modifier.size(40.dp), color = Color.White)
+                    f == null || isVideo -> Box(
+                        Modifier.size(52.dp).clip(RoundedCornerShape(50)).background(Color.Black.copy(alpha = 0.55f)),
+                        contentAlignment = Alignment.Center,
+                    ) { Text(if (f == null) "⬇" else "▶", color = Color.White, fontSize = 24.sp) }
                 }
+                // Etiqueta no canto: tipo, extensão, duração e tamanho.
+                val info = buildString {
+                    append(if (isVideo) "🎥 " else "📷 ")
+                    append(ClientStore.typeLabel(att.name, att.mime))
+                    att.durationMs?.takeIf { isVideo }?.let { append(" · ").append(ClientStore.formatDuration(it)) }
+                    append(" · ").append(formatSize(att.size))
+                }
+                Text(
+                    info, color = Color.White, fontSize = 11.sp,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(6.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                )
             }
         }
         "audio" -> AudioPlayer(file, att.durationMs, downloading) { download(false) }
@@ -395,11 +423,21 @@ private fun AttachmentView(client: FalaiClient, m: LocalMessage) {
                 .padding(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("📄", fontSize = 28.sp)
-            Spacer(Modifier.width(8.dp))
+            // Selo com a extensão (APK, PDF, ZIP…), para saber o que é sem abrir.
+            val label = ClientStore.typeLabel(att.name, att.mime)
+            Box(
+                Modifier.size(width = 46.dp, height = 52.dp).clip(RoundedCornerShape(6.dp)).background(FalaiColors.Primary),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(label, color = Color.White, fontSize = if (label.length > 4) 10.sp else 13.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+            }
+            Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(att.name, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
-                Text(formatSize(att.size) + if (file == null) " · toque para baixar" else "", fontSize = 12.sp, color = FalaiColors.TextSec)
+                Text(
+                    "$label · " + formatSize(att.size) + if (file == null) " · toque para baixar" else "",
+                    fontSize = 12.sp, color = FalaiColors.TextSec,
+                )
             }
             if (downloading) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
         }
