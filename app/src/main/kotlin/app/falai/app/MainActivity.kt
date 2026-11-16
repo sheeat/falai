@@ -21,6 +21,7 @@ import app.falai.app.ui.FalaiTheme
 import app.falai.app.ui.InviteScreen
 import app.falai.app.ui.NewConversationScreen
 import app.falai.app.ui.PairScreen
+import app.falai.app.ui.SettingsScreen
 
 class MainActivity : ComponentActivity() {
     /** Convite que chegou por link (falai://convite?...), para preencher a tela de entrada. */
@@ -86,7 +87,7 @@ class MainActivity : ComponentActivity() {
 /** Navegação simples entre as telas, sem biblioteca extra. */
 @Composable
 private fun Navigation(client: app.falai.client.FalaiClient) {
-    // "lista" | "nova" | "convite" | "chat:<id>"
+    // "lista" | "nova" | "convite" | "ajustes" | "chat:<id>"
     var route by rememberSaveable { mutableStateOf("lista") }
     BackHandler(enabled = route != "lista") { route = "lista" }
     when {
@@ -96,6 +97,7 @@ private fun Navigation(client: app.falai.client.FalaiClient) {
             onCreated = { route = "chat:$it" },
         )
         route == "convite" -> InviteScreen(client, onBack = { route = "lista" })
+        route == "ajustes" -> SettingsScreen(client, onBack = { route = "lista" }, onInvite = { route = "convite" })
         route.startsWith("chat:") -> ChatScreen(
             client,
             conversationId = route.removePrefix("chat:"),
@@ -106,6 +108,7 @@ private fun Navigation(client: app.falai.client.FalaiClient) {
             onOpen = { route = "chat:$it" },
             onNew = { route = "nova" },
             onInvite = { route = "convite" },
+            onSettings = { route = "ajustes" },
         )
     }
 }

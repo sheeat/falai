@@ -181,7 +181,7 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
             verticalAlignment = Alignment.CenterVertically,
         ) {
             BackButton(onClick = onBack)
-            Avatar(summary?.displayName ?: "?", size = 38.dp)
+            Avatar(summary?.displayName ?: "?", size = 38.dp, client = client, mediaId = summary?.avatarMediaId)
             Spacer(Modifier.width(10.dp))
             Column {
                 Text(
