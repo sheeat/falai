@@ -58,7 +58,9 @@ class MainActivity : Activity() {
     }
 
     private fun render() {
-        val (running, adminCode, error) = Status.read(this)
+        val (_, adminCode, error) = Status.read(this)
+        // O estado real: se o Android fechou o app, o servidor não existe mais neste processo.
+        val running = ServerService.current != null
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         val battery = if (pm.isIgnoringBatteryOptimizations(packageName)) "liberada" else "OTIMIZADA (pode desligar o servidor)"
         status.text = buildString {
@@ -76,6 +78,9 @@ class MainActivity : Activity() {
                 appendLine(adminCode)
             }
             if (error != null) { appendLine(); appendLine("Erro: $error") }
+            getSharedPreferences("status", MODE_PRIVATE).getString("crash", null)?.let {
+                appendLine(); appendLine("Último problema (o servidor parou): $it")
+            }
             appendLine()
             appendLine("Bateria: $battery")
             val events = ServerService.current?.recentEvents().orEmpty()
