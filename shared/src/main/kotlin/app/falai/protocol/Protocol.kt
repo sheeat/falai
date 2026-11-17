@@ -17,7 +17,7 @@ import kotlinx.serialization.json.Json
 const val PROTOCOL_VERSION = 1
 
 /** Versão do Falaí (servidor e página web). O app usa a do build.gradle. */
-const val FALAI_VERSION = "0.9.3"
+const val FALAI_VERSION = "0.9.4"
 
 val FalaiJson = Json {
     classDiscriminator = "type"
