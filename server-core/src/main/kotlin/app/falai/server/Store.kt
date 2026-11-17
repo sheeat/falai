@@ -165,6 +165,14 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
                 db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '6')")
             }
         }
+        if (version < 7) {
+            db.transaction {
+                // 0.11: mensagens trancadas. Cada aparelho mostra o seu cadeado (chave pública).
+                db.execute("ALTER TABLE devices ADD COLUMN public_key TEXT")
+                db.execute("ALTER TABLE messages ADD COLUMN sealed_json TEXT")
+                db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '7')")
+            }
+        }
     }
 
     // ---------- Utilidades ----------
@@ -379,11 +387,45 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
     )
 
     fun userById(id: String): UserDto? =
-        db.query("SELECT id, name, is_admin, avatar_media_id, removed_at FROM users WHERE id = ?", id).firstOrNull()?.let(::rowToUser)
+        db.query("SELECT id, name, is_admin, avatar_media_id, removed_at FROM users WHERE id = ?", id).firstOrNull()
+            ?.let(::rowToUser)?.let { u -> u.copy(devices = deviceKeys(u.id).getOrDefault(u.id, emptyList())) }
 
     /** Todo mundo, inclusive quem saiu da família (marcado com removed, para o nome aparecer nas mensagens antigas). */
-    fun listUsers(): List<UserDto> =
-        db.query("SELECT id, name, is_admin, avatar_media_id, removed_at FROM users ORDER BY name COLLATE NOCASE").map(::rowToUser)
+    fun listUsers(): List<UserDto> {
+        val keys = deviceKeys(null)
+        return db.query("SELECT id, name, is_admin, avatar_media_id, removed_at FROM users ORDER BY name COLLATE NOCASE")
+            .map(::rowToUser).map { u -> u.copy(devices = keys.getOrDefault(u.id, emptyList())) }
+    }
+
+    /** Cadeados dos aparelhos que funcionam (de uma pessoa, ou de todos com [userId] null). */
+    private fun deviceKeys(userId: String?): Map<String, List<DeviceKeyDto>> =
+        db.query(
+            """SELECT d.id, d.user_id, d.public_key FROM devices d JOIN users u ON u.id = d.user_id
+               WHERE d.revoked_at IS NULL AND d.public_key IS NOT NULL AND u.removed_at IS NULL
+               ${if (userId != null) "AND d.user_id = ?" else ""} ORDER BY d.created_at""",
+            *listOfNotNull(userId).toTypedArray(),
+        ).groupBy({ it.string("user_id") }, { DeviceKeyDto(it.string("id"), it.string("public_key")) })
+
+    /** O aparelho mostra o seu cadeado. Devolve true se mudou (aí todos precisam saber). */
+    fun setDeviceKey(deviceId: String, publicKey: String): Boolean {
+        val raw = runCatching { java.util.Base64.getDecoder().decode(publicKey) }.getOrNull()
+        if (raw == null || raw.size != 65 || raw[0] != 4.toByte()) throw FalaiException("invalid", "Cadeado inválido.")
+        val canonical = java.util.Base64.getEncoder().encodeToString(raw)
+        val cur = db.query("SELECT public_key FROM devices WHERE id = ?", deviceId).firstOrNull()?.stringOrNull("public_key")
+        if (cur == canonical) return false
+        db.update("UPDATE devices SET public_key = ? WHERE id = ?", canonical, deviceId)
+        return true
+    }
+
+    /** Aparelhos que precisam conseguir abrir uma mensagem trancada desta conversa. */
+    fun requiredDeviceIds(conversationId: String): Set<String> =
+        db.query(
+            """SELECT d.id FROM devices d
+               JOIN members mb ON mb.user_id = d.user_id AND mb.conversation_id = ? AND mb.left_seq IS NULL
+               JOIN users u ON u.id = d.user_id
+               WHERE d.revoked_at IS NULL AND d.public_key IS NOT NULL AND u.removed_at IS NULL""",
+            conversationId,
+        ).map { it.string("id") }.toSet()
 
     /**
      * Só o administrador: tira a pessoa da família. Os aparelhos dela param de funcionar na hora;
@@ -578,7 +620,13 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
     fun storeMessage(device: AuthedDevice, frame: SendFrame): StoredMessage = db.transaction {
         val id = frame.id.trim()
         if (id.isEmpty() || id.length > 64) throw FalaiException("invalid", "Id de mensagem inválido.")
-        if (frame.body.isEmpty() && frame.attachment == null) throw FalaiException("invalid", "Mensagem vazia.")
+        if (frame.body.isEmpty() && frame.attachment == null && frame.sealed == null) throw FalaiException("invalid", "Mensagem vazia.")
+        frame.sealed?.let { s ->
+            if (frame.body.isNotEmpty()) throw FalaiException("invalid", "Mensagem trancada não leva texto aberto.")
+            if (s.ct.length > 400_000 || s.keys.size > 500 || s.keys.values.any { it.length > 200 } || s.senderKey.length > 100) {
+                throw FalaiException("too_large", "Mensagem grande demais.")
+            }
+        }
         if (frame.body.length > 64_000) throw FalaiException("too_large", "Mensagem grande demais.")
 
         val existing = messageById(id)
@@ -589,6 +637,12 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         }
         if (!isMember(frame.conversationId, device.user.id)) {
             throw FalaiException("forbidden", "Você não participa desta conversa.")
+        }
+        frame.sealed?.let { s ->
+            // Todo aparelho da conversa precisa conseguir abrir; se faltou algum (aparelho novo),
+            // o celular busca os cadeados de novo e tranca outra vez.
+            val missing = requiredDeviceIds(frame.conversationId) - s.keys.keys
+            if (missing.isNotEmpty()) throw FalaiException("keys_changed", "Tem aparelho novo na conversa. Tentando de novo…")
         }
         val att = frame.attachment?.let { a ->
             val m = media(a.mediaId) ?: throw FalaiException("invalid", "Anexo não encontrado.")
@@ -607,13 +661,14 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         }
         val now = clock()
         val seq = db.insert(
-            """INSERT INTO messages (id, conversation_id, author_id, author_device_id, body, created_at, attachment_json, media_id, reply_to_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO messages (id, conversation_id, author_id, author_device_id, body, created_at, attachment_json, media_id, reply_to_id, sealed_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             id, frame.conversationId, device.user.id, device.deviceId, frame.body, now,
             att?.let { FalaiJson.encodeToString(AttachmentDto.serializer(), it) }, att?.mediaId, replyTo,
+            frame.sealed?.let { FalaiJson.encodeToString(SealedDto.serializer(), it) },
         )
         StoredMessage(
-            MessageDto(seq, id, frame.conversationId, device.user.id, device.deviceId, frame.body, now, att, replyToId = replyTo),
+            MessageDto(seq, id, frame.conversationId, device.user.id, device.deviceId, frame.body, now, att, replyToId = replyTo, sealed = frame.sealed),
             isNew = true,
         )
     }
@@ -670,7 +725,7 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         if (target.authorId != device.user.id) throw FalaiException("forbidden", "Só quem escreveu pode apagar para todos.")
         if (!isMember(f.conversationId, device.user.id)) throw FalaiException("forbidden", "Você não participa desta conversa.")
         db.update(
-            "UPDATE messages SET body = '', attachment_json = NULL, media_id = NULL, deleted_at = ? WHERE id = ?",
+            "UPDATE messages SET body = '', attachment_json = NULL, media_id = NULL, sealed_json = NULL, deleted_at = ? WHERE id = ?",
             clock(), target.id,
         )
         db.update("DELETE FROM reactions WHERE message_id = ?", target.id)
@@ -779,6 +834,7 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         refId = r.stringOrNull("ref_id"),
         replyToId = r.stringOrNull("reply_to_id"),
         deleted = r.longOrNull("deleted_at") != null,
+        sealed = r.stringOrNull("sealed_json")?.let { FalaiJson.decodeFromString(SealedDto.serializer(), it) },
     )
 
     /** Junta as reações às mensagens (uma consulta só para a lista toda). */

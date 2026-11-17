@@ -14,16 +14,17 @@ import kotlinx.serialization.json.Json
  * WebSocket (/ws, cabeçalho "Authorization: Bearer <token>"):
  *   cada quadro é um objeto JSON com o campo "type".
  */
-const val PROTOCOL_VERSION = 2
+const val PROTOCOL_VERSION = 3
 
 /**
  * Versão do protocolo que o aparelho entende, enviada no endereço do WebSocket ("/ws?p=2").
  * Aparelhos antigos (sem "p") não recebem reações e "apagado para todos" como mensagens soltas.
+ * Antes do 3, também não entendem mensagens trancadas: recebem um aviso para atualizar.
  */
 const val CLIENT_PROTOCOL_PARAM = "p"
 
 /** Versão do Falaí (servidor e página web). O app usa a do build.gradle. */
-const val FALAI_VERSION = "0.10.0"
+const val FALAI_VERSION = "0.11.0"
 
 val FalaiJson = Json {
     classDiscriminator = "type"
@@ -87,7 +88,38 @@ data class UserDto(
     val avatarMediaId: String? = null,
     /** O administrador tirou a pessoa da família (as mensagens antigas continuam com o nome dela). */
     val removed: Boolean = false,
+    /** Cadeados (chaves públicas) dos aparelhos da pessoa, para trancar mensagens para eles. */
+    val devices: List<DeviceKeyDto> = emptyList(),
 )
+
+/** O cadeado de um aparelho: chave pública ECDH P-256, 65 bytes "crus" (0x04|X|Y) em base64. */
+@Serializable
+data class DeviceKeyDto(val deviceId: String, val publicKey: String)
+
+/**
+ * Mensagem trancada (ponta a ponta). O conteúdo ([SealedPayload] em JSON) vai em [ct], trancado
+ * com uma chave nova a cada mensagem; essa chave vai em [keys], trancada para cada aparelho.
+ * Veja o arquivo E2e.kt (celular) e a página web para as contas.
+ */
+@Serializable
+data class SealedDto(
+    val v: Int = 1,
+    /** Cadeado do aparelho que mandou (quem recebe confere se é o que conhece). */
+    val senderKey: String,
+    /** IV (12 bytes, base64) de [ct]. */
+    val iv: String,
+    /** O conteúdo trancado (AES-256-GCM), base64. */
+    val ct: String,
+    /** id do aparelho -> chave da mensagem trancada para ele (IV de 12 bytes + chave + etiqueta), base64. */
+    val keys: Map<String, String>,
+)
+
+/** O que vai dentro da mensagem trancada. */
+@Serializable
+data class SealedPayload(val body: String = "", val attachment: AttachmentDto? = null)
+
+/** Texto que aparelhos com app antigo veem no lugar de uma mensagem trancada. */
+const val SEALED_OLD_APP_TEXT = "🔒 Mensagem protegida. Atualize o Falaí para ler."
 
 @Serializable
 data class ConversationDto(
@@ -143,6 +175,8 @@ data class MessageDto(
     val deleted: Boolean = false,
     /** Reações: pessoa -> emoji. */
     val reactions: Map<String, String> = emptyMap(),
+    /** Mensagem trancada: o texto e o anexo de verdade estão aqui dentro ([body] vem vazio). */
+    val sealed: SealedDto? = null,
 )
 
 @Serializable
@@ -161,6 +195,15 @@ data class AttachmentDto(
      * antes de baixar, como nos outros mensageiros. No máximo [MAX_THUMB_CHARS] caracteres.
      */
     val thumb: String? = null,
+    /**
+     * Arquivo trancado (só dentro de uma mensagem trancada): a chave (32 bytes, base64), o
+     * "nonce" (12 bytes, base64) e o tamanho e o SHA-256 do arquivo trancado que está no servidor.
+     * [size] e [sha256] continuam sendo os do arquivo original.
+     */
+    val key: String? = null,
+    val nonce: String? = null,
+    val encSize: Long? = null,
+    val encSha256: String? = null,
 )
 
 /** Tamanho máximo da miniatura em base64 (cerca de 18 KB de JPEG). */
@@ -253,7 +296,13 @@ data class SendFrame(
     val attachment: AttachmentDto? = null,
     /** Resposta a outra mensagem da mesma conversa. */
     val replyToId: String? = null,
+    /** Mensagem trancada ([body] vazio; [attachment] só com o arquivo trancado). */
+    val sealed: SealedDto? = null,
 ) : ClientFrame
+
+/** Este aparelho mostra o seu cadeado (chave pública). Sem resposta; todos recebem [UserUpdatedFrame]. */
+@Serializable @SerialName("device_key")
+data class DeviceKeyFrame(val publicKey: String) : ClientFrame
 
 /** Reagir a uma mensagem ([emoji] = "" tira a reação). Responde com [AckFrame] (pelo [id]). */
 @Serializable @SerialName("react")

@@ -2,7 +2,7 @@
 
 Mensageiro da família. Um celular antigo fica em casa como servidor, e os celulares e tablets da família se conectam a ele pela internet através do Cloudflare Tunnel.
 
-## Estado atual: 0.10 (grupos completos, responder, reagir, tiques, modo escuro)
+## Estado atual: 0.11 (conversas trancadas de ponta a ponta)
 
 | Parte | O que faz | Testado |
 |---|---|---|
@@ -60,7 +60,15 @@ Mensageiro da família. Um celular antigo fica em casa como servidor, e os celul
 - **Modo escuro**: *Configurações → Aparência* (igual ao celular/computador, claro ou escuro).
 - Protocolo 2 (`/ws?p=2`); aparelhos com app antigo continuam funcionando (não veem reações; apagada aparece como "🚫 Mensagem apagada").
 
-Ainda não tem: notificações pelo Google (FCM), editor de vídeo, criptografia no app.
+**0.11: conversas trancadas (criptografia de ponta a ponta):**
+- Cada aparelho (celular ou computador) tem o seu **cadeado**: uma chave pública que vai para o servidor e uma chave privada que **nunca sai do aparelho**.
+- Cada mensagem, foto, vídeo, áudio e arquivo é trancado no aparelho de quem manda, com uma chave nova, e essa chave vai trancada só para os aparelhos de quem está na conversa (ECDH P-256 + HKDF-SHA256 + AES-256-GCM; arquivos em pedaços de 1 MB). O servidor guarda só caixas trancadas: nem o celular-servidor nem a Cloudflare conseguem ler.
+- Se aparece um aparelho novo na conversa (alguém instalou num tablet), o servidor recusa a mensagem sem a chave dele e o app tranca de novo, sozinho.
+- **Limite desta versão:** um aparelho novo (ou o app reinstalado, ou outro navegador) **não abre as mensagens antigas**, porque elas não foram trancadas para ele: aparece "🔒 Não deu para abrir esta mensagem neste aparelho". As novas abrem normalmente. A cópia de segurança com senha vem na 0.12.
+- Continuam abertos para o servidor: quem fala com quem e quando, nome e foto dos grupos, fotos de perfil, reações e avisos do grupo. Chamadas já eram diretas e trancadas (WebRTC).
+- Protocolo 3 (`/ws?p=3`). Aparelhos com app antigo veem "🔒 Mensagem protegida. Atualize o Falaí para ler." Atualize primeiro o servidor, depois os celulares.
+
+Ainda não tem: notificações pelo Google (FCM), editor de vídeo, cópia de segurança das conversas.
 
 ## Rodar os testes (PC)
 

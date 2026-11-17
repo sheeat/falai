@@ -163,6 +163,14 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
                 db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '5')")
             }
         }
+        if (version < 6) {
+            db.transaction {
+                // 0.11: cadeados dos aparelhos (para trancar) e os que já conheci (para conferir quem mandou).
+                db.execute("ALTER TABLE users ADD COLUMN devices_json TEXT")
+                db.execute("CREATE TABLE known_keys (device_id TEXT NOT NULL, public_key TEXT NOT NULL, PRIMARY KEY (device_id, public_key))")
+                db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '6')")
+            }
+        }
     }
 
     // ---------- Configuração ----------
@@ -193,6 +201,37 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
         setConfig("isAdmin", if (a.isAdmin) "1" else "0")
     }
 
+    // ---------- Cadeado deste aparelho ----------
+
+    /** As chaves deste aparelho (criadas na primeira vez). A privada nunca sai daqui. */
+    fun myKeys(): E2e.Keys = db.transaction {
+        val priv = getConfig("e2e_private")
+        val pub = getConfig("e2e_public")
+        if (priv != null && pub != null) return@transaction E2e.Keys(E2e.unb64(priv), E2e.unb64(pub))
+        val k = E2e.newKeys()
+        setConfig("e2e_private", E2e.b64(k.privatePkcs8))
+        setConfig("e2e_public", k.publicB64)
+        k
+    }
+
+    /** Cadeados dos aparelhos de quem participa da conversa (inclusive os meus). */
+    fun deviceKeysFor(conversationId: String): Map<String, String> {
+        val out = LinkedHashMap<String, String>()
+        for (uid in memberIds(conversationId)) user(uid)?.takeIf { !it.removed }?.devices?.forEach { out[it.deviceId] = it.publicKey }
+        return out
+    }
+
+    /** Este cadeado já foi visto neste aparelho [deviceId]? (para aceitar mensagens dele) */
+    fun isKnownKey(deviceId: String, publicKey: String): Boolean =
+        db.query("SELECT 1 AS x FROM known_keys WHERE device_id = ? AND public_key = ?", deviceId, publicKey).isNotEmpty()
+
+    private fun rememberKeys(u: UserDto) {
+        u.devices.forEach { db.execute("INSERT OR IGNORE INTO known_keys (device_id, public_key) VALUES (?, ?)", it.deviceId, it.publicKey) }
+    }
+
+    private fun encodeDevices(u: UserDto) =
+        FalaiJson.encodeToString(kotlinx.serialization.builtins.ListSerializer(app.falai.protocol.DeviceKeyDto.serializer()), u.devices)
+
     /** Maior seq já sincronizado por completo. O próximo sync começa daqui. */
     fun syncedSeq(): Long = getConfig("syncedSeq")?.toLong() ?: 0L
     fun setSyncedSeq(seq: Long) = setConfig("syncedSeq", seq.toString())
@@ -203,21 +242,30 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
         db.execute("DELETE FROM users")
         users.forEach {
             db.execute(
-                "INSERT INTO users (id, name, is_admin, avatar_media_id, removed) VALUES (?, ?, ?, ?, ?)",
-                it.id, it.name, it.isAdmin, it.avatarMediaId, it.removed,
+                "INSERT INTO users (id, name, is_admin, avatar_media_id, removed, devices_json) VALUES (?, ?, ?, ?, ?, ?)",
+                it.id, it.name, it.isAdmin, it.avatarMediaId, it.removed, encodeDevices(it),
             )
+            rememberKeys(it)
         }
     }
 
-    fun upsertUser(u: UserDto) {
+    fun upsertUser(u: UserDto) = db.transaction {
         db.execute(
-            "INSERT OR REPLACE INTO users (id, name, is_admin, avatar_media_id, removed) VALUES (?, ?, ?, ?, ?)",
-            u.id, u.name, u.isAdmin, u.avatarMediaId, u.removed,
+            "INSERT OR REPLACE INTO users (id, name, is_admin, avatar_media_id, removed, devices_json) VALUES (?, ?, ?, ?, ?, ?)",
+            u.id, u.name, u.isAdmin, u.avatarMediaId, u.removed, encodeDevices(u),
         )
+        rememberKeys(u)
     }
 
     private fun rowToUser(it: Row) =
-        UserDto(it.string("id"), it.string("name"), it.bool("is_admin"), it.stringOrNull("avatar_media_id"), it.bool("removed"))
+        UserDto(
+            it.string("id"), it.string("name"), it.bool("is_admin"), it.stringOrNull("avatar_media_id"), it.bool("removed"),
+            devices = it.stringOrNull("devices_json")?.let { j ->
+                runCatching {
+                    FalaiJson.decodeFromString(kotlinx.serialization.builtins.ListSerializer(app.falai.protocol.DeviceKeyDto.serializer()), j)
+                }.getOrNull()
+            } ?: emptyList(),
+        )
 
     /** Todo mundo, inclusive quem saiu da família (veja [UserDto.removed]). */
     fun users(): List<UserDto> = db.query("SELECT * FROM users ORDER BY name COLLATE NOCASE").map(::rowToUser)
@@ -521,8 +569,28 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
         }
     }
 
+    /** Atualiza o anexo de uma mensagem minha (ex.: depois de trancar o arquivo). */
+    fun updateAttachment(messageId: String, att: AttachmentDto) {
+        db.update("UPDATE messages SET attachment_json = ? WHERE id = ?", encodeAtt(att), messageId)
+    }
+
+    /** Mensagem trancada que este aparelho não conseguiu abrir: atualiza só a ordem e o estado. */
+    fun upsertUnreadable(m: MessageDto, myUserId: String) = db.transaction {
+        val status = if (m.authorId == myUserId) MessageStatus.SENT else MessageStatus.RECEIVED
+        val changed = db.update("UPDATE messages SET seq = ?, created_at = ?, status = ? WHERE id = ?", m.seq, m.createdAt, status.name, m.id)
+        if (changed == 0) {
+            db.execute(
+                """INSERT INTO messages (id, seq, conversation_id, author_id, body, created_at, status, reply_to_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                m.id, m.seq, m.conversationId, m.authorId, LOCKED_LABEL, m.createdAt, status.name, m.replyToId,
+            )
+        }
+    }
+
     companion object {
         const val DELETED_LABEL = "🚫 Mensagem apagada"
+        /** Mensagem trancada que não era para este aparelho (ex.: enviada antes dele entrar). */
+        const val LOCKED_LABEL = "🔒 Não deu para abrir esta mensagem neste aparelho."
 
         /** Texto curto para a lista de conversas: "📷 Foto", "🎤 Áudio (0:42)" etc. */
         fun preview(body: String, att: AttachmentDto?): String {

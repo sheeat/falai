@@ -323,7 +323,7 @@ class FalaiServer(
             reply(
                 HelloFrame(
                     protocol = PROTOCOL_VERSION,
-                    user = device.user,
+                    user = store.userById(device.user.id) ?: device.user,
                     deviceId = device.deviceId,
                     conversations = store.conversationsOf(device.user.id),
                     lastSeq = store.lastSeqFor(device.user.id),
@@ -376,6 +376,7 @@ class FalaiServer(
         is UpdateGroupFrame -> f.requestId
         is LeaveGroupFrame -> f.requestId
         is ReceiptFrame -> null
+        is DeviceKeyFrame -> null
         is PingFrame -> f.requestId
         is SetPublicAddressFrame -> f.requestId
         is ApproveWebFrame -> f.requestId
@@ -393,16 +394,18 @@ class FalaiServer(
      * mensagem solta), então essas ficam de fora; a mensagem apagada chega com um aviso no texto.
      */
     private fun forProtocol(f: ServerFrame, protocol: Int): ServerFrame? {
-        if (protocol >= 2) return f
+        if (protocol >= PROTOCOL_VERSION) return f
         fun old(m: MessageDto): MessageDto? = when {
-            m.kind == MessageKinds.REACTION || m.kind == MessageKinds.DELETE -> null
-            m.deleted -> m.copy(body = "🚫 Mensagem apagada")
+            protocol < 2 && (m.kind == MessageKinds.REACTION || m.kind == MessageKinds.DELETE) -> null
+            protocol < 2 && m.deleted -> m.copy(body = "🚫 Mensagem apagada")
+            // App de antes da 0.11 não sabe abrir mensagem trancada: mostra um aviso para atualizar.
+            m.sealed != null -> m.copy(sealed = null, body = SEALED_OLD_APP_TEXT, attachment = null)
             else -> m
         }
         return when (f) {
             is MessageFrame -> old(f.message)?.let { MessageFrame(it) }
             is SyncBatchFrame -> SyncBatchFrame(f.messages.mapNotNull(::old))
-            is ReceiptsFrame -> null
+            is ReceiptsFrame -> if (protocol < 2) null else f
             else -> f
         }
     }
@@ -505,6 +508,12 @@ class FalaiServer(
                 val ch = store.leaveGroup(device, f.conversationId)
                 reply(ConversationFrame(f.requestId, store.conversationFor(ch.conversation.id, device.user.id)!!))
                 publishGroupChange(ch, exceptDeviceId = device.deviceId)
+            }
+
+            is DeviceKeyFrame -> {
+                if (store.setDeviceKey(device.deviceId, f.publicKey)) {
+                    store.userById(device.user.id)?.let { hub.deliverAll(UserUpdatedFrame(null, it)) }
+                }
             }
 
             is ReceiptFrame -> {

@@ -381,10 +381,12 @@ class FalaiClient(
                 // Chamadas: o servidor manda logo em seguida as que ainda estão em andamento.
                 _callEvents.tryEmit(f)
                 _connection.value = ConnectionState.ONLINE
+                // Mostra o cadeado deste aparelho (antes de mandar qualquer mensagem).
+                sendFrame(ws, app.falai.protocol.DeviceKeyFrame(keys.publicB64))
                 sendFrame(ws, ListUsersFrame("hello-users"))
                 sendFrame(ws, SyncFrame(store.syncedSeq()))
                 // Esvazia a fila: tudo que foi escrito sem conexão sai agora, na ordem.
-                store.pending().forEach { sendFrame(ws, SendFrame(it.id, it.conversationId, it.body, it.attachment, it.replyToId)) }
+                store.pending().forEach { m -> frameFor(m)?.let { sendFrame(ws, it) } }
                 bump()
                 kickUploads()
             }
@@ -394,12 +396,12 @@ class FalaiClient(
                 bump()
             }
             is MessageFrame -> {
-                store.upsertFromServer(f.message, acc.userId)
+                ingest(f.message, acc)
                 bump()
                 acknowledgeDelivery(ws, listOf(f.message), acc.userId)
             }
             is SyncBatchFrame -> {
-                f.messages.forEach { store.upsertFromServer(it, acc.userId) }
+                f.messages.forEach { ingest(it, acc) }
                 bump()
                 acknowledgeDelivery(ws, f.messages, acc.userId)
             }
@@ -420,6 +422,10 @@ class FalaiClient(
             }
             is UsersFrame -> {
                 store.replaceUsers(f.users)
+                // Mensagens que voltaram porque tinha aparelho novo: tranca de novo, agora para todos.
+                val again = resealAfterUsers.toList()
+                resealAfterUsers.clear()
+                again.forEach { id -> store.messageById(id)?.takeIf { it.status == MessageStatus.PENDING }?.let { m -> frameFor(m)?.let { sendFrame(ws, it) } } }
                 bump()
                 pendingRequests.remove(f.requestId)?.complete(f)
             }
@@ -457,6 +463,18 @@ class FalaiClient(
                 val waiting = f.requestId?.let { pendingRequests.remove(it) }
                 if (waiting != null) {
                     waiting.completeExceptionally(FalaiClientException(f.code, f.message))
+                } else if (f.requestId != null && f.code == "keys_changed") {
+                    // Apareceu aparelho novo na conversa: busca os cadeados e tranca de novo (até 3 vezes).
+                    val id = f.requestId!!
+                    val n = (resealTries[id] ?: 0) + 1
+                    resealTries[id] = n
+                    if (n <= 3) {
+                        resealAfterUsers.add(id)
+                        sendFrame(ws, ListUsersFrame("keys-$id"))
+                    } else {
+                        store.markFailed(id)
+                        bump()
+                    }
                 } else if (f.requestId != null && f.code in setOf("forbidden", "invalid", "too_large", "conflict")) {
                     // Mensagem recusada de vez: sai da fila e aparece como falha.
                     log("Mensagem ${f.requestId} recusada: ${f.message}")
@@ -465,6 +483,54 @@ class FalaiClient(
                 }
             }
         }
+    }
+
+    // ---------- Cadeado (criptografia de ponta a ponta) ----------
+
+    /** As chaves deste aparelho. */
+    private val keys: E2e.Keys by lazy { store.myKeys() }
+    private val resealAfterUsers = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val resealTries = ConcurrentHashMap<String, Int>()
+
+    /**
+     * A mensagem pronta para o servidor: o texto e o anexo vão trancados para todos os aparelhos da
+     * conversa (inclusive os meus). O servidor só vê o arquivo trancado, sem nome nem tipo.
+     */
+    private fun frameFor(m: LocalMessage): SendFrame? {
+        val acc = store.account() ?: return null
+        val att = m.attachment
+        if (att != null && att.mediaId.isEmpty()) return null
+        val publicAtt = att?.let {
+            if (it.key != null) app.falai.protocol.AttachmentDto(
+                mediaId = it.mediaId, kind = "file", mime = "application/octet-stream", name = "falai.enc",
+                size = it.encSize ?: 0, sha256 = it.encSha256.orEmpty(),
+            ) else it
+        }
+        val recipients = store.deviceKeysFor(m.conversationId) + (acc.deviceId to keys.publicB64)
+        val sealed = E2e.seal(app.falai.protocol.SealedPayload(m.body, att), m.id, m.conversationId, acc.deviceId, keys, recipients)
+        return SendFrame(m.id, m.conversationId, "", publicAtt, m.replyToId, sealed)
+    }
+
+    /** Guarda uma mensagem do servidor; se vier trancada, destranca aqui (só este aparelho consegue). */
+    private fun ingest(m: app.falai.protocol.MessageDto, acc: Account) {
+        val s = m.sealed
+        if (s == null || m.deleted || m.kind != null) {
+            store.upsertFromServer(m, acc.userId)
+            return
+        }
+        val p = E2e.open(s, m.id, m.conversationId, m.authorDeviceId, acc.deviceId, keys) { k ->
+            store.isKnownKey(m.authorDeviceId, k) || (m.authorDeviceId == acc.deviceId && k == keys.publicB64)
+        }
+        if (p == null) {
+            log("Mensagem ${m.id} trancada não abriu neste aparelho")
+            store.upsertUnreadable(m, acc.userId)
+            return
+        }
+        val att = p.attachment?.let { a ->
+            // O arquivo é o que o servidor confirmou; o resto (nome, tipo, chave) veio trancado.
+            a.copy(mediaId = m.attachment?.mediaId ?: a.mediaId, thumb = app.falai.protocol.sanitizeThumb(a.thumb))
+        }
+        store.upsertFromServer(m.copy(body = p.body, attachment = att, sealed = null), acc.userId)
     }
 
     // ---------- Ações da tela ----------
@@ -476,7 +542,7 @@ class FalaiClient(
         require(text.isNotEmpty()) { "Mensagem vazia" }
         val m = store.insertPending(UUID.randomUUID().toString(), conversationId, acc.userId, text, replyToId)
         bump()
-        if (_connection.value == ConnectionState.ONLINE) sendFrame(socket, SendFrame(m.id, m.conversationId, m.body, replyToId = replyToId))
+        if (_connection.value == ConnectionState.ONLINE) frameFor(m)?.let { sendFrame(socket, it) }
         return m
     }
 
@@ -578,7 +644,7 @@ class FalaiClient(
         if (att.mediaId.isEmpty()) throw FalaiClientException("uploading", "Espere o arquivo terminar de subir.")
         val m = store.insertPendingForward(UUID.randomUUID().toString(), conversationId, acc.userId, "", att)
         bump()
-        if (_connection.value == ConnectionState.ONLINE) sendFrame(socket, SendFrame(m.id, m.conversationId, m.body, m.attachment))
+        if (_connection.value == ConnectionState.ONLINE) frameFor(m)?.let { sendFrame(socket, it) }
         return m
     }
 
@@ -727,6 +793,8 @@ class FalaiClient(
             mediaId = "", kind = kind, mime = mime, name = name,
             size = file.length(), sha256 = sha256Hex(file), durationMs = durationMs,
             thumb = app.falai.protocol.sanitizeThumb(thumb),
+            // Arquivo trancado: chave nova só para ele (vai dentro da mensagem trancada).
+            key = E2e.b64(E2e.random(32)), nonce = E2e.b64(E2e.random(12)),
         )
         val m = store.insertPendingMedia(UUID.randomUUID().toString(), conversationId, acc.userId, caption.trim(), att, file.path)
         bump()
@@ -794,15 +862,33 @@ class FalaiClient(
 
     private fun upload(o: OutgoingMedia) {
         val acc = store.account() ?: return
-        val file = java.io.File(o.path)
-        if (!file.exists()) throw FalaiClientException("missing", "O arquivo não existe mais neste aparelho.")
+        val original = java.io.File(o.path)
+        if (!original.exists()) throw FalaiClientException("missing", "O arquivo não existe mais neste aparelho.")
+        // Arquivo trancado: o que sobe é a cópia trancada (o servidor não vê o conteúdo).
+        var att = o.attachment
+        val file = if (att.key != null) {
+            mediaDir.mkdirs()
+            val enc = java.io.File(mediaDir, "enviando-${o.messageId}.enc")
+            if (o.mediaId == null || !enc.exists() || att.encSha256 == null) {
+                E2e.encryptFile(original, enc, E2e.unb64(att.key!!), E2e.unb64(att.nonce!!))
+                att = att.copy(encSize = enc.length(), encSha256 = sha256Hex(enc))
+                store.updateAttachment(o.messageId, att)
+                if (o.mediaId != null) store.resetOutgoingMediaId(o.messageId)
+            }
+            enc
+        } else original
+        val o = if (att !== o.attachment) o.copy(attachment = att, mediaId = null) else o
         val json = "application/json".toMediaType()
         val parseStatus = { t: String -> FalaiJson.decodeFromString(app.falai.protocol.MediaStatus.serializer(), t) }
 
         var status = if (o.mediaId == null) {
             val body = FalaiJson.encodeToString(
                 app.falai.protocol.MediaCreateRequest.serializer(),
-                app.falai.protocol.MediaCreateRequest(o.attachment.size, o.attachment.sha256, o.attachment.mime, o.attachment.name),
+                if (o.attachment.key != null) {
+                    app.falai.protocol.MediaCreateRequest(o.attachment.encSize!!, o.attachment.encSha256!!, "application/octet-stream", "falai.enc")
+                } else {
+                    app.falai.protocol.MediaCreateRequest(o.attachment.size, o.attachment.sha256, o.attachment.mime, o.attachment.name)
+                },
             )
             call(authed(Request.Builder().url("${acc.serverUrl}/api/media").post(body.toRequestBody(json)), acc).build(), parseStatus)
                 .also { store.setOutgoingMediaId(o.messageId, it.mediaId) }
@@ -836,12 +922,13 @@ class FalaiClient(
         }
 
         store.markUploaded(o.messageId, status.mediaId)
+        if (file !== original) file.delete()
         _uploadProgress.value = _uploadProgress.value - o.messageId
         if (_lastError.value?.contains("arquivo", ignoreCase = true) == true) _lastError.value = null
         bump()
         val m = store.messageById(o.messageId)
         if (m != null && _connection.value == ConnectionState.ONLINE) {
-            sendFrame(socket, SendFrame(m.id, m.conversationId, m.body, m.attachment, m.replyToId))
+            frameFor(m)?.let { sendFrame(socket, it) }
         }
     }
 
@@ -873,11 +960,33 @@ class FalaiClient(
                 r.body!!.byteStream().use { input -> tmp.outputStream().use { input.copyTo(it, 256 * 1024) } }
                 att.sha256.ifEmpty { r.header("X-Content-SHA256").orEmpty() }
             }
-            if (expected.isEmpty() || sha256Hex(tmp) != expected) {
-                tmp.delete()
-                throw FalaiClientException("hash_mismatch", "O arquivo chegou corrompido. Tente de novo.")
+            if (att.key != null) {
+                // Arquivo trancado: confere a cópia trancada, destranca e confere o original.
+                if (sha256Hex(tmp) != att.encSha256) {
+                    tmp.delete()
+                    throw FalaiClientException("hash_mismatch", "O arquivo chegou corrompido. Tente de novo.")
+                }
+                val plain = java.io.File(mediaDir, att.mediaId + ".abrindo")
+                try {
+                    E2e.decryptFile(tmp, plain, E2e.unb64(att.key!!), E2e.unb64(att.nonce!!))
+                } catch (e: Exception) {
+                    plain.delete()
+                    throw FalaiClientException("hash_mismatch", "Não deu para abrir o arquivo trancado.")
+                } finally {
+                    tmp.delete()
+                }
+                if (sha256Hex(plain) != att.sha256) {
+                    plain.delete()
+                    throw FalaiClientException("hash_mismatch", "O arquivo chegou corrompido. Tente de novo.")
+                }
+                if (!plain.renameTo(target)) throw FalaiClientException("io", "Não consegui salvar o arquivo.")
+            } else {
+                if (expected.isEmpty() || sha256Hex(tmp) != expected) {
+                    tmp.delete()
+                    throw FalaiClientException("hash_mismatch", "O arquivo chegou corrompido. Tente de novo.")
+                }
+                if (!tmp.renameTo(target)) throw FalaiClientException("io", "Não consegui salvar o arquivo.")
             }
-            if (!tmp.renameTo(target)) throw FalaiClientException("io", "Não consegui salvar o arquivo.")
             store.setLocalMedia(att.mediaId, target.path)
             bump()
             target

@@ -654,8 +654,122 @@
     ws: null, online: false, retry: 0, unread: {}, uploads: {}, pendingSends: {},
     replyTo: null, pendingOps: {}, receiptSent: {}
   };
+  window.__falaiState = state; // usado só pelos testes automáticos
   var QUICK = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
   var DELETED = "🚫 Mensagem apagada";
+  var LOCKED = "🔒 Não deu para abrir esta mensagem neste computador.";
+
+  // ---------- cadeado (criptografia de ponta a ponta) ----------
+  // As mesmas contas do celular (E2e.kt): ECDH P-256 + HKDF-SHA256 + AES-256-GCM, com o WebCrypto
+  // do navegador. A chave privada fica só neste navegador; o servidor só vê caixas trancadas.
+  var E2E = (function () {
+    var subtle = crypto.subtle, te = new TextEncoder(), td = new TextDecoder();
+    var SALT = te.encode("falai-e2e-v1"), CHUNK = 1 << 20, TAG = 16;
+    var me = null, wrapCache = {}, known = {};
+    function b64(buf) {
+      var b = new Uint8Array(buf), s = "";
+      for (var i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+      return btoa(s);
+    }
+    function unb64(str) { var bin = atob(str), b = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i); return b; }
+    function rand(n) { return crypto.getRandomValues(new Uint8Array(n)); }
+    function cat(a, b) { var o = new Uint8Array(a.length + b.length); o.set(a, 0); o.set(b, a.length); return o; }
+    var EC = { name: "ECDH", namedCurve: "P-256" };
+    async function init() {
+      var saved = null;
+      try { saved = JSON.parse(localStorage.getItem("falai_e2e") || "null"); } catch (e) { /* sem memória */ }
+      try { known = JSON.parse(localStorage.getItem("falai_known_keys") || "{}") || {}; } catch (e) { known = {}; }
+      if (saved && saved.priv && saved.pub) {
+        try { me = { priv: await subtle.importKey("pkcs8", unb64(saved.priv), EC, false, ["deriveBits"]), pub: saved.pub }; return; }
+        catch (e) { /* estragou: faz outra */ }
+      }
+      var kp = await subtle.generateKey(EC, true, ["deriveBits"]);
+      var pkcs8 = await subtle.exportKey("pkcs8", kp.privateKey), raw = await subtle.exportKey("raw", kp.publicKey);
+      me = { priv: kp.privateKey, pub: b64(raw) };
+      try { localStorage.setItem("falai_e2e", JSON.stringify({ priv: b64(pkcs8), pub: me.pub })); } catch (e) { /* sem memória */ }
+    }
+    /** Guarda os cadeados que este computador já viu (para conferir quem mandou). */
+    function learn(users) {
+      var changed = false;
+      users.forEach(function (u) {
+        (u.devices || []).forEach(function (d) {
+          var l = known[d.deviceId] || (known[d.deviceId] = []);
+          if (l.indexOf(d.publicKey) < 0) { l.push(d.publicKey); changed = true; }
+        });
+      });
+      if (changed) try { localStorage.setItem("falai_known_keys", JSON.stringify(known)); } catch (e) { /* sem memória */ }
+    }
+    function isKnown(dev, key) { return (known[dev] || []).indexOf(key) >= 0; }
+    function wrapKey(otherPub, from, to) {
+      var k = otherPub + "|" + from + "|" + to;
+      if (!wrapCache[k]) wrapCache[k] = (async function () {
+        var pub = await subtle.importKey("raw", unb64(otherPub), EC, false, []);
+        var shared = await subtle.deriveBits({ name: "ECDH", public: pub }, me.priv, 256);
+        var hk = await subtle.importKey("raw", shared, "HKDF", false, ["deriveBits"]);
+        var wk = await subtle.deriveBits({ name: "HKDF", hash: "SHA-256", salt: SALT, info: te.encode("wrap|" + from + "|" + to) }, hk, 256);
+        return subtle.importKey("raw", wk, "AES-GCM", false, ["encrypt", "decrypt"]);
+      })();
+      wrapCache[k].catch(function () { delete wrapCache[k]; });
+      return wrapCache[k];
+    }
+    function aesKey(raw) { return subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]); }
+    async function seal(payload, msgId, convId, myDev, recipients) {
+      var k = rand(32), iv = rand(12), kk = await aesKey(k);
+      var ct = await subtle.encrypt({ name: "AES-GCM", iv: iv, additionalData: te.encode(msgId + "|" + convId) }, kk, te.encode(JSON.stringify(payload)));
+      var keys = {};
+      for (var dev in recipients) {
+        try {
+          var wk = await wrapKey(recipients[dev], myDev, dev), wiv = rand(12);
+          var w = await subtle.encrypt({ name: "AES-GCM", iv: wiv, additionalData: te.encode(msgId) }, wk, k);
+          keys[dev] = b64(cat(wiv, new Uint8Array(w)));
+        } catch (e) { /* cadeado estragado: pula esse aparelho */ }
+      }
+      return { v: 1, senderKey: me.pub, iv: b64(iv), ct: b64(ct), keys: keys };
+    }
+    async function open(sd, msgId, convId, senderDev, myDev) {
+      try {
+        var trusted = isKnown(senderDev, sd.senderKey) || (senderDev === myDev && sd.senderKey === me.pub);
+        if (!trusted || !sd.keys || !sd.keys[myDev]) return null;
+        var w = unb64(sd.keys[myDev]);
+        var wk = await wrapKey(sd.senderKey, senderDev, myDev);
+        var k = await subtle.decrypt({ name: "AES-GCM", iv: w.slice(0, 12), additionalData: te.encode(msgId) }, wk, w.slice(12));
+        var plain = await subtle.decrypt({ name: "AES-GCM", iv: unb64(sd.iv), additionalData: te.encode(msgId + "|" + convId) }, await aesKey(k), unb64(sd.ct));
+        return JSON.parse(td.decode(plain));
+      } catch (e) { return null; }
+    }
+    function chunkIv(nonce, i) {
+      var iv = nonce.slice();
+      for (var j = 0; j < 4; j++) iv[8 + j] ^= (i >>> (24 - 8 * j)) & 255;
+      return iv;
+    }
+    function chunkAad(i, last) { return new Uint8Array([(i >>> 24) & 255, (i >>> 16) & 255, (i >>> 8) & 255, i & 255, last ? 1 : 0]); }
+    /** Tranca um arquivo inteiro (em pedaços de 1 MB). Devolve um Blob. */
+    async function encryptFile(buf, keyRaw, nonce) {
+      var plain = new Uint8Array(buf), kk = await aesKey(keyRaw), parts = [];
+      var chunks = plain.length === 0 ? 1 : Math.ceil(plain.length / CHUNK);
+      for (var i = 0; i < chunks; i++) {
+        var piece = plain.subarray(i * CHUNK, Math.min(plain.length, (i + 1) * CHUNK));
+        parts.push(await subtle.encrypt({ name: "AES-GCM", iv: chunkIv(nonce, i), additionalData: chunkAad(i, i === chunks - 1) }, kk, piece));
+      }
+      return new Blob(parts, { type: "application/octet-stream" });
+    }
+    async function decryptFile(buf, keyRaw, nonce, mime) {
+      var enc = new Uint8Array(buf), kk = await aesKey(keyRaw), parts = [], block = CHUNK + TAG;
+      if (enc.length < TAG) throw new Error("Arquivo trancado inválido.");
+      var chunks = enc.length <= block ? 1 : Math.ceil(enc.length / block);
+      for (var i = 0; i < chunks; i++) {
+        var piece = enc.subarray(i * block, Math.min(enc.length, (i + 1) * block));
+        parts.push(await subtle.decrypt({ name: "AES-GCM", iv: chunkIv(nonce, i), additionalData: chunkAad(i, i === chunks - 1) }, kk, piece));
+      }
+      return new Blob(parts, { type: mime || "application/octet-stream" });
+    }
+    function encryptedSize(n) { return n + (n === 0 ? 1 : Math.ceil(n / CHUNK)) * TAG; }
+    return {
+      init: init, learn: learn, seal: seal, open: open, encryptFile: encryptFile, decryptFile: decryptFile,
+      encryptedSize: encryptedSize, b64: b64, unb64: unb64, rand: rand, pub: function () { return me && me.pub; }
+    };
+  })();
+  window.falaiE2E = E2E; // para os testes automáticos
 
   // ---------- aparência (claro / escuro) ----------
   function themeMode() { try { return localStorage.getItem("falai_tema") || "auto"; } catch (e) { return "auto"; } }
@@ -820,6 +934,7 @@
     }
     clearTimeout(linkTimer);
     state.me = { id: me.userId, name: me.name };
+    try { await E2E.init(); } catch (e) { toast("Este navegador não consegue proteger as mensagens. Use o Chrome, o Edge ou o Firefox atualizados."); }
     $("login").classList.add("hidden");
     $("app").classList.remove("hidden");
     renderConvs();
@@ -840,12 +955,14 @@
 
   function connect() {
     setStatus(false, "conectando…");
-    var ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws?p=2");
+    var ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws?p=3");
     state.ws = ws;
     ws.onmessage = function (ev) {
       var f;
       try { f = JSON.parse(ev.data); } catch (e) { return; }
-      handle(f);
+      // Um quadro de cada vez, na ordem: mensagens trancadas são abertas antes (isso leva um instante).
+      rx = rx.then(function () { return unsealFrame(f); }).then(function () { handle(f); })
+        .catch(function (e) { console.warn("quadro", e); });
     };
     ws.onclose = function (ev) {
       if (state.ws !== ws) return;
@@ -858,6 +975,52 @@
       setTimeout(connect, d);
     };
   }
+
+  var rx = Promise.resolve();
+  async function unseal(m) {
+    if (!m.sealed || m.deleted || m.kind) return;
+    var sd = m.sealed;
+    delete m.sealed;
+    var p = state.deviceId ? await E2E.open(sd, m.id, m.conversationId, m.authorDeviceId, state.deviceId) : null;
+    if (!p) { m.body = LOCKED; m.attachment = null; m.locked = true; return; }
+    m.body = p.body || "";
+    if (p.attachment) {
+      var a = p.attachment;
+      a.mediaId = (m.attachment && m.attachment.mediaId) || a.mediaId;
+      if (a.thumb && !/^[A-Za-z0-9+/]+={0,2}$/.test(a.thumb)) delete a.thumb;
+      m.attachment = a;
+    } else m.attachment = null;
+  }
+  async function unsealFrame(f) {
+    if (f.type === "message") await unseal(f.message);
+    else if (f.type === "sync_batch") { for (var i = 0; i < f.messages.length; i++) await unseal(f.messages[i]); }
+    else if (f.type === "users") E2E.learn(f.users);
+    else if (f.type === "user_updated" || f.type === "hello") E2E.learn([f.user]);
+  }
+
+  // Mensagem pronta para o servidor: texto e anexo trancados para todos os aparelhos da conversa.
+  async function sealedFrame(m) {
+    var c = state.convs[m.conversationId];
+    var recipients = {};
+    (c ? c.memberIds : []).forEach(function (uid) {
+      var u = state.users[uid];
+      if (u && !u.removed) (u.devices || []).forEach(function (d) { recipients[d.deviceId] = d.publicKey; });
+    });
+    recipients[state.deviceId] = E2E.pub();
+    var a = m.attachment, payload = { body: m.body || "" };
+    if (a) payload.attachment = a;
+    var frame = { type: "send", id: m.id, conversationId: m.conversationId, body: "" };
+    if (a) frame.attachment = a.key ? { mediaId: a.mediaId, kind: "file", mime: "application/octet-stream", name: "falai.enc", size: a.encSize, sha256: a.encSha256 } : a;
+    if (m.replyToId) frame.replyToId = m.replyToId;
+    frame.sealed = await E2E.seal(payload, m.id, m.conversationId, state.deviceId, recipients);
+    return frame;
+  }
+  /** Manda (ou manda de novo) uma mensagem minha que está na fila. */
+  async function transmit(m) {
+    if (!state.online || !state.deviceId || !E2E.pub()) return;
+    try { send(await sealedFrame(m)); } catch (e) { console.warn("trancar", e); }
+  }
+  var resealTries = {}, resealAfterUsers = {};
 
   // Pedidos que esperam resposta (ex.: trocar o nome): resolve quando a resposta chega.
   var waiting = {};
@@ -891,14 +1054,20 @@
         if (state.current && !fresh[state.current]) closeChat();
         setAvatar($("meAvatar"), f.user.name, f.user.avatarMediaId);
         setStatus(true, "online");
+        if (E2E.pub()) send({ type: "device_key", publicKey: E2E.pub() });
         send({ type: "list_users", requestId: "web-users" });
         send({ type: "sync", afterSeq: state.lastSeq });
         // O que ficou esperando a conexão sai agora.
-        Object.keys(state.pendingSends).forEach(function (id) { send(state.pendingSends[id]); });
+        Object.keys(state.pendingSends).forEach(function (id) { transmit(state.pendingSends[id]); });
         renderConvs();
         break;
       case "users":
         f.users.forEach(function (u) { state.users[u.id] = u; });
+        // Tinha aparelho novo na conversa: tranca de novo, agora para todos.
+        Object.keys(resealAfterUsers).forEach(function (id) {
+          delete resealAfterUsers[id];
+          if (state.pendingSends[id]) transmit(state.pendingSends[id]);
+        });
         renderConvs(); renderChat(); renderPeople(); renderGroupInfo();
         break;
       case "user_updated":
@@ -957,6 +1126,10 @@
       case "call_state": Calls.onState(f.call); break;
       case "call_signal_in": Calls.onSignal(f); break;
       case "error":
+        if (f.requestId && f.code === "keys_changed" && state.pendingSends[f.requestId]) {
+          var tries = resealTries[f.requestId] = (resealTries[f.requestId] || 0) + 1;
+          if (tries <= 3) { resealAfterUsers[f.requestId] = 1; send({ type: "list_users", requestId: "web-keys" }); break; }
+        }
         if (f.requestId && state.pendingOps[f.requestId]) {
           delete state.pendingOps[f.requestId];
           toast(f.message);
@@ -1355,6 +1528,7 @@
         esc(a.name) + '</div><div class="fsize">Enviando ' + Math.round(up * 100) + "% · " + sizeLabel(a.size) +
         '</div><div class="progress"><div style="width:' + Math.round(up * 100) + '%"></div></div></div></div>';
     }
+    if (a.key) return encAttachmentHtml(m, a);
     var url = mediaUrl(a.mediaId);
     if (a.kind === "image") {
       return '<img class="media" loading="lazy" src="' + url + '" alt="Foto" data-view="' + esc(a.mediaId) + '" data-name="' + esc(a.name) + '">' +
@@ -1375,6 +1549,71 @@
     return '<a class="file" href="' + mediaUrl(a.mediaId, true) + '" title="Baixar"><div class="ext">' + esc(extOf(a.name, a.mime)) +
       '</div><div style="min-width:0"><div class="fname">' + esc(a.name) + '</div><div class="fsize">' + esc(extOf(a.name, a.mime)) + " · " +
       sizeLabel(a.size) + " · clique para baixar</div></div></a>";
+  }
+
+  // ---------- arquivos trancados: baixa, confere, destranca e mostra ----------
+  var encCache = {}, encAtts = {};
+  var AUTO_OPEN = 25 * 1024 * 1024;
+  function ensureOpen(a) {
+    var c = encCache[a.mediaId];
+    if (c && (c.url || c.promise)) return c.promise || Promise.resolve(c.url);
+    c = encCache[a.mediaId] = {};
+    c.promise = (async function () {
+      var r = await fetch(mediaUrl(a.mediaId), { credentials: "same-origin" });
+      if (!r.ok) throw new Error("Não consegui baixar (" + r.status + ").");
+      var buf = await r.arrayBuffer();
+      if (toHex(await crypto.subtle.digest("SHA-256", buf)) !== a.encSha256) throw new Error("O arquivo chegou corrompido.");
+      var blob = await E2E.decryptFile(buf, E2E.unb64(a.key), E2E.unb64(a.nonce), a.mime);
+      if (toHex(await crypto.subtle.digest("SHA-256", await blob.arrayBuffer())) !== a.sha256) throw new Error("O arquivo chegou corrompido.");
+      c.url = URL.createObjectURL(blob);
+      delete c.promise;
+      return c.url;
+    })();
+    c.promise.catch(function (e) { c.error = e.message; delete c.promise; });
+    return c.promise;
+  }
+  function openThen(a, then) {
+    ensureOpen(a).then(then, function (e) { toast(e.message); renderChat(); });
+    renderChat();
+  }
+  function saveBlob(url, name) {
+    var link = document.createElement("a");
+    link.href = url; link.download = name || "arquivo";
+    document.body.appendChild(link); link.click(); link.remove();
+  }
+  function encAttachmentHtml(m, a) {
+    encAtts[a.mediaId] = a;
+    var c = encCache[a.mediaId] || {}, id = esc(a.mediaId), info = esc(extOf(a.name, a.mime)) + " · " + sizeLabel(a.size);
+    var busy = !!c.promise, err = c.error ? '<div class="fsize" style="color:var(--error)">' + esc(c.error) + "</div>" : "";
+    var save = '<a href="#" data-encsave="' + id + '">⬇ Salvar</a>';
+    var thumb = a.thumb ? "data:image/jpeg;base64," + a.thumb : "";
+    if ((a.kind === "image" || a.kind === "audio") && !c.url && !c.promise && !c.error && a.size <= AUTO_OPEN) ensureOpen(a).then(function () { renderChat(); }, function () { renderChat(); });
+    if (a.kind === "image") {
+      if (c.url) return '<img class="media" src="' + c.url + '" alt="Foto" data-view="' + id + '" data-name="' + esc(a.name) + '">' +
+        '<div class="media-actions">' + save + '<span style="color:var(--text-sec)">🔒 ' + info + "</span></div>";
+      return (thumb ? '<img class="media" src="' + thumb + '" alt="Foto" data-encopen="' + id + '" style="filter:blur(1px)">' :
+        '<div class="file" data-encopen="' + id + '" style="cursor:pointer"><div class="ext">📷</div><div class="fsize">' + (busy ? "Abrindo…" : "Toque para abrir") + "</div></div>") +
+        err + '<div class="media-actions"><span style="color:var(--text-sec)">🔒 ' + (busy ? "abrindo… · " : "") + info + "</span></div>";
+    }
+    if (a.kind === "video") {
+      if (c.url) return '<video class="media" controls preload="metadata"' + (thumb ? ' poster="' + thumb + '"' : "") + ' src="' + c.url + '"></video>' +
+        '<div class="media-actions"><a href="#" data-zoomvideo="' + id + '" data-name="' + esc(a.name) + '">🔍 Ampliar</a>' + save +
+        '<span style="color:var(--text-sec)">🔒 🎥 ' + info + (a.durationMs ? " · " + durLabel(a.durationMs) : "") + "</span></div>";
+      return '<div data-encopen="' + id + '" style="position:relative;cursor:pointer">' +
+        (thumb ? '<img class="media" src="' + thumb + '" alt="Vídeo">' : '<div class="file"><div class="ext">🎥</div></div>') +
+        '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center"><span style="background:rgba(0,0,0,.55);color:#fff;border-radius:24px;padding:8px 16px;font-weight:700">' +
+        (busy ? "Abrindo…" : "▶ Abrir vídeo") + "</span></div></div>" + err +
+        '<div class="media-actions"><span style="color:var(--text-sec)">🔒 🎥 ' + info + (a.durationMs ? " · " + durLabel(a.durationMs) : "") + "</span></div>";
+    }
+    if (a.kind === "audio") {
+      if (c.url) return '<audio controls preload="metadata" src="' + c.url + '"></audio><div class="media-actions">' + save +
+        (a.durationMs ? '<span style="color:var(--text-sec)">🔒 🎤 ' + durLabel(a.durationMs) + "</span>" : "") + "</div>";
+      return '<div class="file" data-encopen="' + id + '" style="cursor:pointer"><div class="ext">🎤</div><div class="fsize">' +
+        (busy ? "Abrindo o áudio…" : "Toque para ouvir") + (a.durationMs ? " · " + durLabel(a.durationMs) : "") + "</div></div>" + err;
+    }
+    return '<a class="file" href="#" data-encsave="' + id + '" title="Baixar"><div class="ext">' + esc(extOf(a.name, a.mime)) +
+      '</div><div style="min-width:0"><div class="fname">' + esc(a.name) + '</div><div class="fsize">🔒 ' + info + " · " +
+      (busy ? "abrindo…" : "clique para baixar") + "</div>" + err + "</div></a>";
   }
 
   function renderChat(scrollToEnd) {
@@ -1421,6 +1660,16 @@
     Array.prototype.forEach.call(box.querySelectorAll("img[data-view]"), function (img) {
       img.onclick = function () { openViewer(img.getAttribute("data-view"), img.getAttribute("data-name"), false); };
       img.onload = function () { if (nearEnd || scrollToEnd) box.scrollTop = box.scrollHeight; };
+    });
+    Array.prototype.forEach.call(box.querySelectorAll("[data-encopen]"), function (el) {
+      el.onclick = function () { var a = encAtts[el.getAttribute("data-encopen")]; if (a) openThen(a, function () { renderChat(); }); };
+    });
+    Array.prototype.forEach.call(box.querySelectorAll("[data-encsave]"), function (el) {
+      el.onclick = function (e) {
+        e.preventDefault();
+        var a = encAtts[el.getAttribute("data-encsave")];
+        if (a) openThen(a, function (url) { saveBlob(url, a.name); renderChat(); });
+      };
     });
     Array.prototype.forEach.call(box.querySelectorAll(".msg[data-id]"), function (el) {
       var id = el.getAttribute("data-id");
@@ -1575,16 +1824,18 @@
     $("vbar").classList.toggle("hidden", !isVideo);
     if (isVideo) {
       img.removeAttribute("src");
-      video.src = mediaUrl(mediaId);
+      video.src = (encCache[mediaId] && encCache[mediaId].url) || mediaUrl(mediaId);
       if (startAt) video.addEventListener("loadedmetadata", function f() { video.currentTime = startAt; video.removeEventListener("loadedmetadata", f); });
       video.play().catch(function () { /* o navegador pode pedir um clique antes */ });
       zoom.el = video;
     } else {
-      img.src = mediaUrl(mediaId);
+      img.src = (encCache[mediaId] && encCache[mediaId].url) || mediaUrl(mediaId);
       zoom.el = img;
     }
     $("viewerName").textContent = name || (isVideo ? "Vídeo" : "Foto");
-    $("viewerSave").href = mediaUrl(mediaId, true);
+    var enc = encCache[mediaId] && encCache[mediaId].url;
+    $("viewerSave").href = enc || mediaUrl(mediaId, true);
+    if (enc) $("viewerSave").setAttribute("download", name || "arquivo"); else $("viewerSave").removeAttribute("download");
     $("zoomTip").classList.remove("hidden");
     resetZoom();
     $("viewer").classList.remove("hidden");
@@ -1615,13 +1866,11 @@
     if (!t || !state.current) return;
     var id = uuid();
     var replyId = state.replyTo && state.replyTo.conversationId === state.current ? state.replyTo.id : null;
-    var frame = { type: "send", id: id, conversationId: state.current, body: t };
-    if (replyId) frame.replyToId = replyId;
     var m = { id: id, conversationId: state.current, authorId: state.me.id, body: t, createdAt: Date.now(), seq: null, status: "pending", replyToId: replyId };
     setReply(null);
     (state.messages[state.current] = state.messages[state.current] || []).push(m);
-    state.pendingSends[id] = frame;
-    send(frame);
+    state.pendingSends[id] = m;
+    transmit(m);
     $("text").value = "";
     autoGrow();
     renderConvs(); renderChat(true);
@@ -1806,13 +2055,20 @@
       if (kind === "image") att.thumb = await imageThumb(file);
       var dur = await mediaDuration(file, kind);
       if (dur) att.durationMs = dur;
-      var st = await uploadMedia(file, mime, att.name, progress);
-      att.sha256 = st.sha256;
+      // Tranca o arquivo aqui no computador: o servidor só recebe a cópia trancada.
+      var plainBuf = await file.arrayBuffer();
+      att.sha256 = toHex(await crypto.subtle.digest("SHA-256", plainBuf));
+      var key = E2E.rand(32), nonce = E2E.rand(12);
+      var enc = await E2E.encryptFile(plainBuf, key, nonce);
+      plainBuf = null;
+      var st = await uploadMedia(enc, "application/octet-stream", "falai.enc", progress);
+      att.key = E2E.b64(key); att.nonce = E2E.b64(nonce); att.encSize = enc.size; att.encSha256 = st.sha256;
       att.mediaId = st.mediaId;
+      // Quem mandou já tem o arquivo aberto: mostra sem baixar de novo.
+      encCache[att.mediaId] = { url: URL.createObjectURL(file.slice(0, file.size, mime)) };
       delete state.uploads[id];
-      var frame = { type: "send", id: id, conversationId: conv, body: caption || "", attachment: att };
-      state.pendingSends[id] = frame;
-      send(frame);
+      state.pendingSends[id] = m;
+      transmit(m);
       renderChat();
     } catch (e) {
       delete state.uploads[id];
