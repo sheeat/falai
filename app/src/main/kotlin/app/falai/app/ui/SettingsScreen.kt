@@ -94,14 +94,19 @@ fun SettingsScreen(client: FalaiClient, onBack: () -> Unit, onInvite: () -> Unit
         }
     }
 
+    // Foto escolhida, esperando a pessoa ajustar (zoom, posição) antes de enviar.
+    var cropping by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) run("Enviando a foto…", "Foto trocada! ✔") {
-            val file = withContext(Dispatchers.IO) { makeProfilePhoto(context, uri) }
-                ?: throw FalaiClientException("photo", "Não consegui abrir essa foto. Escolha outra.")
-            try {
-                client.updateProfile(photo = file)
-            } finally {
-                file.delete()
+        if (uri != null && busy == null) {
+            busy = "Abrindo a foto…"
+            message = null
+            scope.launch {
+                val bmp = withContext(Dispatchers.IO) {
+                    val copied = copyFromUri(context, uri)
+                    try { copied?.let { loadThumbnail(it.file, 2048) } } finally { copied?.file?.delete() }
+                }
+                busy = null
+                if (bmp == null) message = "Não consegui abrir essa foto. Escolha outra." else cropping = bmp
             }
         }
     }
@@ -114,6 +119,7 @@ fun SettingsScreen(client: FalaiClient, onBack: () -> Unit, onInvite: () -> Unit
         }
     }
 
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().background(Color.White).imePadding()) {
         Row(
             Modifier.fillMaxWidth().background(FalaiColors.Primary).statusBarsPadding()
@@ -219,6 +225,25 @@ fun SettingsScreen(client: FalaiClient, onBack: () -> Unit, onInvite: () -> Unit
             InfoLine("Conexão", null) { ConnectionBadge(state, onDark = false) }
             InfoLine("Versão do Falaí", appVersion)
         }
+    }
+    cropping?.let { source ->
+        AvatarCropScreen(
+            source,
+            onCancel = { cropping = null },
+            onDone = { left, top, side, bmp ->
+                cropping = null
+                run("Enviando a foto…", "Foto trocada! ✔") {
+                    val file = withContext(Dispatchers.IO) { saveCroppedAvatar(context, bmp, left, top, side) }
+                        ?: throw FalaiClientException("photo", "Não consegui preparar a foto. Tente de novo.")
+                    try {
+                        client.updateProfile(photo = file)
+                    } finally {
+                        file.delete()
+                    }
+                }
+            },
+        )
+    }
     }
     if (showFamily) FamilyDialog(client) { showFamily = false }
 }

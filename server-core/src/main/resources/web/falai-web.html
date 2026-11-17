@@ -199,6 +199,21 @@
   #edCaption { flex: 1; padding: 12px 16px; border-radius: 22px; border: 0; font: inherit; font-size: 15px; outline: none; }
   #edSend { width: 50px; height: 50px; border-radius: 50%; border: 0; background: var(--primary); color: #fff; font-size: 22px; flex: none; }
 
+  /* ---------- Ajustar a foto de perfil ---------- */
+  #avCrop { position: fixed; inset: 0; background: #111; z-index: 16; display: flex; flex-direction: column; color: #fff; user-select: none; }
+  #avCrop .bar { display: flex; align-items: center; gap: 6px; padding: 8px 12px; }
+  #avCrop .bar .grow { flex: 1; text-align: center; font-weight: 600; font-size: 17px; }
+  #avCrop .tool { background: rgba(255,255,255,.1); color: #fff; border: 0; border-radius: 18px; padding: 8px 14px; font-weight: 600; font-size: 14px; }
+  #avCrop .tool:hover { background: rgba(255,255,255,.2); }
+  #avStage { flex: 1; min-height: 0; position: relative; }
+  #avCanvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+  #avCanvas:active { cursor: grabbing; }
+  #avCrop .foot { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 10px 16px 16px; }
+  #avCrop .hint { font-size: 13px; color: #bbb; text-align: center; }
+  #avCrop .zoomrow { display: flex; align-items: center; gap: 10px; width: 100%; max-width: 420px; }
+  #avCrop .zoomrow input { flex: 1; accent-color: var(--primary); }
+  #avCrop .btn { width: 100%; max-width: 420px; }
+
   #toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: #333; color: #fff; padding: 10px 18px; border-radius: 20px;
            font-size: 14px; z-index: 20; max-width: calc(100% - 32px); }
 
@@ -406,6 +421,21 @@
         <button class="btn danger" id="askYes"></button>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- Ajustar a foto de perfil (zoom, posição) antes de usar -->
+<div id="avCrop" class="hidden">
+  <div class="bar">
+    <button class="tool" id="avCancel" title="Não usar esta foto (Esc)">✕ Cancelar</button>
+    <span class="grow">Ajustar a foto</span>
+    <button class="tool" id="avRotate" title="Girar 90°">⟳ Girar</button>
+  </div>
+  <div id="avStage"><canvas id="avCanvas"></canvas></div>
+  <div class="foot">
+    <div class="hint">Arraste a foto. Para aproximar ou afastar, use a rodinha do mouse, dois dedos ou a barrinha.</div>
+    <div class="zoomrow"><span>➖</span><input type="range" id="avZoom" min="0.5" max="5" step="0.01" value="1" title="Aproximar ou afastar"><span>➕</span></div>
+    <button class="btn" id="avUse">Usar esta foto</button>
   </div>
 </div>
 
@@ -1466,29 +1496,133 @@
     try { await request({ type: "update_profile", avatarMediaId: "" }); setMsg("Foto removida ✔", true); }
     catch (e) { setMsg(e.message); }
   };
-  // Foto de perfil: quadrado do meio da foto, 512×512, JPEG (igual ao celular).
-  function squareJpeg(file) {
-    return new Promise(function (resolve, reject) {
-      var url = URL.createObjectURL(file);
-      var img = new Image();
-      img.onload = function () {
-        var side = Math.min(img.width, img.height), out = Math.min(512, side);
-        var c = document.createElement("canvas"); c.width = out; c.height = out;
-        c.getContext("2d").drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, out, out);
-        URL.revokeObjectURL(url);
-        c.toBlob(function (b) { b ? resolve(b) : reject(new Error("Não consegui preparar a foto.")); }, "image/jpeg", 0.88);
-      };
-      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error("Não consegui abrir essa foto. Escolha outra.")); };
-      img.src = url;
+  // Foto de perfil: a pessoa ajusta (arrasta, aproxima, afasta, gira) dentro de um círculo;
+  // sai um quadrado 512×512 em JPEG (igual ao celular). O que sobra quando afasta fica branco.
+  var AvatarCrop = (function () {
+    var MAX_ZOOM = 5, OUT = 512, MAX_SIDE = 2048;
+    var canvas = $("avCanvas"), ctx = canvas.getContext("2d");
+    var src = null, w = 0, h = 0, zoom = 1, ox = 0, oy = 0, D = 0, done = null;
+    var pointers = {}, last = null;
+
+    function minZoom() { return Math.min(w, h) / Math.max(w, h); }
+    function scale() { return D / Math.min(w, h) * zoom; }
+    function clamp() {
+      var s = scale(), lx = Math.abs(w * s - D) / 2, ly = Math.abs(h * s - D) / 2;
+      ox = Math.max(-lx, Math.min(lx, ox)); oy = Math.max(-ly, Math.min(ly, oy));
+    }
+    // Zoom em volta de (cx, cy) (relativo ao centro do círculo): o ponto embaixo do mouse/dedos fica parado.
+    function zoomAt(change, cx, cy) {
+      var nz = Math.max(minZoom(), Math.min(MAX_ZOOM, zoom * change)), f = nz / zoom;
+      ox = (ox - cx) * f + cx; oy = (oy - cy) * f + cy; zoom = nz;
+      clamp(); $("avZoom").value = zoom; draw();
+    }
+    function layout() {
+      var r = canvas.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.max(1, Math.round(r.width * dpr)); canvas.height = Math.max(1, Math.round(r.height * dpr));
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      D = Math.max(100, Math.min(r.width, r.height) - 40);
+      clamp(); draw();
+    }
+    function draw() {
+      if (!src) return;
+      var r = canvas.getBoundingClientRect(), cx = r.width / 2, cy = r.height / 2, s = scale();
+      ctx.fillStyle = "#111"; ctx.fillRect(0, 0, r.width, r.height);
+      ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(cx, cy, D / 2, 0, Math.PI * 2); ctx.fill();
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(src, cx + ox - w * s / 2, cy + oy - h * s / 2, w * s, h * s);
+      ctx.fillStyle = "rgba(0,0,0,.62)"; ctx.beginPath();
+      ctx.rect(0, 0, r.width, r.height); ctx.arc(cx, cy, D / 2, 0, Math.PI * 2, true); ctx.fill("evenodd");
+      ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx, cy, D / 2, 0, Math.PI * 2); ctx.stroke();
+    }
+    function reset() { zoom = 1; ox = 0; oy = 0; var z = $("avZoom"); z.min = minZoom(); z.max = MAX_ZOOM; z.value = 1; }
+    function fromCenter(e) { var r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left - r.width / 2, y: e.clientY - r.top - r.height / 2 }; }
+    function pinchInfo() {
+      var ps = Object.keys(pointers).map(function (k) { return pointers[k]; });
+      if (ps.length < 2) return null;
+      return { mx: (ps[0].x + ps[1].x) / 2, my: (ps[0].y + ps[1].y) / 2, d: Math.hypot(ps[0].x - ps[1].x, ps[0].y - ps[1].y) || 1 };
+    }
+    canvas.addEventListener("pointerdown", function (e) {
+      canvas.setPointerCapture(e.pointerId); pointers[e.pointerId] = fromCenter(e); last = pinchInfo();
     });
-  }
+    canvas.addEventListener("pointermove", function (e) {
+      if (!pointers[e.pointerId]) return;
+      var prev = pointers[e.pointerId], cur = fromCenter(e);
+      pointers[e.pointerId] = cur;
+      var p = pinchInfo();
+      if (p && last) {
+        ox += p.mx - last.mx; oy += p.my - last.my;
+        zoomAt(p.d / last.d, p.mx, p.my);
+        last = p;
+      } else if (!p) {
+        ox += cur.x - prev.x; oy += cur.y - prev.y; clamp(); draw();
+      }
+    });
+    function up(e) { delete pointers[e.pointerId]; last = pinchInfo(); }
+    canvas.addEventListener("pointerup", up); canvas.addEventListener("pointercancel", up);
+    canvas.addEventListener("wheel", function (e) {
+      e.preventDefault();
+      var c = fromCenter(e); zoomAt(Math.exp(-e.deltaY * 0.0015), c.x, c.y);
+    }, { passive: false });
+    canvas.addEventListener("dblclick", function () { reset(); draw(); });
+    $("avZoom").oninput = function () { zoomAt(parseFloat($("avZoom").value) / zoom, 0, 0); };
+    $("avRotate").onclick = function () {
+      var c = document.createElement("canvas"); c.width = h; c.height = w;
+      var g = c.getContext("2d"); g.translate(h, 0); g.rotate(Math.PI / 2); g.drawImage(src, 0, 0);
+      src = c; w = c.width; h = c.height; reset(); draw();
+    };
+    function finish(blob) {
+      $("avCrop").classList.add("hidden"); window.removeEventListener("resize", layout);
+      var d = done; done = null; src = null; pointers = {}; last = null;
+      if (d) d(blob);
+    }
+    $("avCancel").onclick = function () { finish(null); };
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && done && !$("avCrop").classList.contains("hidden")) finish(null);
+    });
+    // O quadrado da foto (em pixels da foto) que está dentro do círculo.
+    function sourceSquare() {
+      var s = scale();
+      return { left: w / 2 - (D / 2 + ox) / s, top: h / 2 - (D / 2 + oy) / s, side: D / s };
+    }
+    $("avUse").onclick = function () {
+      var q = sourceSquare(), c = document.createElement("canvas"); c.width = OUT; c.height = OUT;
+      var g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, OUT, OUT);
+      g.imageSmoothingQuality = "high";
+      var k = OUT / q.side;
+      g.drawImage(src, -q.left * k, -q.top * k, w * k, h * k);
+      c.toBlob(function (b) { finish(b); }, "image/jpeg", 0.88);
+    };
+    function open(file) {
+      return new Promise(function (resolve, reject) {
+        var url = URL.createObjectURL(file), img = new Image();
+        img.onload = function () {
+          URL.revokeObjectURL(url);
+          var k = Math.min(1, MAX_SIDE / Math.max(img.width, img.height));
+          var c = document.createElement("canvas");
+          c.width = Math.max(1, Math.round(img.width * k)); c.height = Math.max(1, Math.round(img.height * k));
+          c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+          src = c; w = c.width; h = c.height; done = resolve; pointers = {}; last = null;
+          reset();
+          $("avCrop").classList.remove("hidden");
+          window.addEventListener("resize", layout);
+          layout();
+        };
+        img.onerror = function () { URL.revokeObjectURL(url); reject(new Error("Não consegui abrir essa foto. Escolha outra.")); };
+        img.src = url;
+      });
+    }
+    return { open: open, state: function () { return { zoom: zoom, ox: ox, oy: oy, D: D, w: w, h: h, sq: sourceSquare() }; } };
+  })();
+  window.falaiAvatarCrop = AvatarCrop; // para os testes automáticos
   $("setPhotoInput").onchange = async function () {
     var f = $("setPhotoInput").files[0];
     $("setPhotoInput").value = "";
     if (!f) return;
+    var blob;
+    try { blob = await AvatarCrop.open(f); } catch (e) { setMsg(e.message); return; }
+    if (!blob) return;
     setMsg("Enviando a foto…", true);
     try {
-      var blob = await squareJpeg(f);
       var up = await uploadMedia(blob, "image/jpeg", "perfil.jpg");
       await request({ type: "update_profile", avatarMediaId: up.mediaId });
       setMsg("Foto trocada ✔", true);
