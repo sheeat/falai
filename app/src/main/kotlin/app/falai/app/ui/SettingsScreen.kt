@@ -224,6 +224,7 @@ fun SettingsScreen(client: FalaiClient, onBack: () -> Unit, onInvite: () -> Unit
             HorizontalDivider(color = FalaiColors.Divider)
             InfoLine("Conexão", null) { ConnectionBadge(state, onDark = false) }
             InfoLine("Versão do Falaí", appVersion)
+            UpdateBanner(client)
         }
     }
     cropping?.let { source ->

@@ -377,6 +377,7 @@ class FalaiClient(
                 }
                 _publicBase.value = f.publicBase
                 _turnConfigured.value = f.turnConfigured
+                _latestApp.value = f.app
                 // Chamadas: o servidor manda logo em seguida as que ainda estão em andamento.
                 _callEvents.tryEmit(f)
                 _connection.value = ConnectionState.ONLINE
@@ -413,6 +414,7 @@ class FalaiClient(
                 f.requestId?.let { pendingRequests.remove(it)?.complete(f) }
             }
             is PongFrame -> pendingRequests.remove(f.requestId)?.complete(f)
+            is app.falai.protocol.AppUpdateFrame -> _latestApp.value = f.app
             is app.falai.protocol.WebApprovedFrame -> pendingRequests.remove(f.requestId)?.complete(f)
             is UserUpdatedFrame -> {
                 store.upsertUser(f.user)
@@ -527,6 +529,51 @@ class FalaiClient(
     suspend fun removeUser(userId: String): UserDto {
         val id = UUID.randomUUID().toString()
         return (request(id, app.falai.protocol.RemoveUserFrame(id, userId)) as UserUpdatedFrame).user
+    }
+
+    // ---------- Versão nova do app ----------
+
+    private val _latestApp = MutableStateFlow<AppApkInfo?>(null)
+    /** A versão do app que está no servidor para baixar (null = nenhuma). */
+    val latestApp: StateFlow<AppApkInfo?> = _latestApp.asStateFlow()
+
+    /**
+     * Baixa o app que está no servidor para [dest] (para atualizar). [onProgress] recebe de 0 a 1.
+     * Lança [FalaiClientException] se não deu.
+     */
+    suspend fun downloadApp(dest: java.io.File, onProgress: (Float) -> Unit = {}) = withContext(Dispatchers.IO) {
+        val acc = store.account() ?: throw FalaiClientException("no_account", "Sem conta neste aparelho.")
+        val req = Request.Builder().url("${acc.serverUrl}/app/falai.apk").build()
+        val part = java.io.File(dest.path + ".part")
+        try {
+            mediaHttp.newCall(req).execute().use { r ->
+                if (!r.isSuccessful) throw FalaiClientException("download", "O servidor ainda não tem o app novo.")
+                val body = r.body ?: throw FalaiClientException("download", "O servidor ainda não tem o app novo.")
+                val total = body.contentLength()
+                var done = 0L
+                body.byteStream().use { input ->
+                    part.outputStream().use { out ->
+                        val buf = ByteArray(256 * 1024)
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            out.write(buf, 0, n)
+                            done += n
+                            if (total > 0) onProgress((done.toFloat() / total).coerceIn(0f, 1f))
+                        }
+                    }
+                }
+                if (total > 0 && done != total) throw FalaiClientException("download", "A internet caiu no meio. Tente de novo.")
+            }
+            dest.delete()
+            if (!part.renameTo(dest)) throw FalaiClientException("download", "Não consegui guardar o app novo.")
+        } catch (e: IOException) {
+            part.delete()
+            throw FalaiClientException("download", "A internet caiu no meio. Tente de novo.")
+        } catch (e: FalaiClientException) {
+            part.delete()
+            throw e
+        }
     }
 
     private val _publicBase = MutableStateFlow<String?>(null)

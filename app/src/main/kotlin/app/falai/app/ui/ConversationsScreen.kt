@@ -102,6 +102,9 @@ fun ConversationsScreen(
                 }
             }
 
+            // Versão nova do app no servidor: "Atualizar".
+            UpdateBanner(client)
+
             if (list.isEmpty()) {
                 Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
                     Text(

@@ -761,4 +761,25 @@ class FalaiClientTest {
         online(ana)
         eventually("Ana receber depois de voltar") { bodies(ana, conv) == listOf("antes", "voltou!") }
     }
+
+    @Test
+    fun `versao nova do app chega nos celulares e da para baixar`() = runBlocking<Unit> {
+        val (chefe, ana, _) = family()
+        assertEquals(null, ana.latestApp.value)
+        val apk = File(dir, "novo.apk").apply { writeBytes(byteArrayOf(0x50, 0x4B) + ByteArray(300_000) { (it % 251).toByte() }) }
+        chefe.publishAppIfNewer(apk, 21, "0.9.3")
+        // Quem está conectado fica sabendo na hora.
+        eventually("Ana saber da versão nova") { ana.latestApp.value?.versionCode == 21L }
+        assertEquals("0.9.3", ana.latestApp.value!!.versionName)
+        // Baixa o arquivo inteiro, com o andamento.
+        val dest = File(dir, "baixado.apk")
+        var last = 0f
+        ana.downloadApp(dest) { last = it }
+        assertTrue(apk.readBytes().contentEquals(dest.readBytes()))
+        assertEquals(1f, last)
+        // Quem conecta depois recebe na chegada (hello).
+        ana.stop(); ana.start()
+        online(ana)
+        assertEquals(21L, ana.latestApp.value?.versionCode)
+    }
 }

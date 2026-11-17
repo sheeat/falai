@@ -46,6 +46,8 @@ Mensageiro da família. Um celular antigo fica em casa como servidor, e os celul
 - **Tirar alguém da família** (só o administrador: ⋮ na conversa, ou *Configurações → Pessoas da família*): os aparelhos da pessoa são desligados na hora; as mensagens antigas ficam.
 - **Trazer de volta** (0.9.1, só o administrador: *Configurações → Pessoas da família → Fora da família*, ou ⋮ na conversa): a pessoa volta com os mesmos aparelhos, sem convite novo; é só ela abrir o Falaí.
 - **Ajustar a foto de perfil** (0.9.2, celular e computador): depois de escolher a foto, arrasta, aproxima ou afasta (dois dedos, rodinha do mouse ou barrinha) e gira, dentro de um círculo; sai um quadrado 512×512.
+- **Atualizar o app** (0.9.3): quando o administrador abre o Falaí com uma versão nova, ela vai sozinha para o servidor, e os outros celulares mostram a faixa **"Versão nova do Falaí → Atualizar"** (baixa e instala pelo próprio Falaí; na 1ª vez o Android pede "Permitir desta fonte"). A página do convite e a página `/app` têm o passo a passo ilustrado dos avisos do Android (Play Protect → "Mais detalhes" → "Instalar mesmo assim").
+- **Importante:** gere o APK sempre no mesmo computador (mesma assinatura) e guarde uma cópia de `C:\Users\<você>\.android\debug.keystore`. Com outra assinatura, o Android recusa a atualização.
 - **Fundo das conversas:** cor calma com desenhinhos clarinhos (7 cores, desenhos liga/desliga, ou uma foto da galeria). *Configurações → Fundo das conversas* (no computador, na engrenagem).
 - **Ícone próprio** (casa-balão com coração) no app, no servidor, nos avisos, na tela de abertura; favicon, ícone de "instalar" e página do convite com a marca no computador.
 - Configurações mais limpas: só conexão e versão.

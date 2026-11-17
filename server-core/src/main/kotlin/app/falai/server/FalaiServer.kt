@@ -157,6 +157,7 @@ class FalaiServer(
     private val limiter = FailureLimiter(config.pairMaxFailures, config.pairWindowMs, clock)
     private val mediaFiles = MediaFiles(config.mediaDir, store, this.log)
     private val invites = InviteSupport(store, config.mediaDir, this.log)
+        .also { it.onApkPublished = { info -> hub.deliverAll(AppUpdateFrame(info)) } }
     /** Falaí no computador: QR Codes esperando o celular, e um limite de pedidos por endereço. */
     val webLinks = WebLinks(clock)
     private val webLimiter = FailureLimiter(30, 10 * 60_000L, clock)
@@ -324,6 +325,7 @@ class FalaiServer(
                     lastSeq = store.lastSeqFor(device.user.id),
                     publicBase = invites.publicBase(),
                     turnConfigured = if (device.user.isAdmin) iceServers.turnConfigured() else null,
+                    app = invites.apkInfo(),
                 )
             )
             calls.onConnected(conn)

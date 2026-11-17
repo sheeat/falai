@@ -275,6 +275,24 @@ class V09Test {
     }
 
     @Test
+    fun `app novo no servidor avisa os aparelhos`() = runBlocking<Unit> {
+        val admin = pair(adminCode, "Edson")
+        val ana = pair(invite(admin.token).code, "Ana")
+        val (a, h0) = hello(ana.token)
+        assertNull(h0.app)
+        val apk = TestApks.signed(File(dir, "apk").apply { mkdirs() })
+        val up = http.put("$base/api/app-apk?versionCode=21&versionName=0.9.3") {
+            header("Authorization", "Bearer ${admin.token}"); setBody(apk.readBytes())
+        }
+        assertEquals(HttpStatusCode.OK, up.status, up.bodyAsText())
+        val upd = a.await<AppUpdateFrame>()
+        assertEquals(21L, upd.app.versionCode)
+        assertEquals("0.9.3", upd.app.versionName)
+        val (_, h1) = hello(ana.token)
+        assertEquals(21L, h1.app?.versionCode)
+    }
+
+    @Test
     fun `convite com nome e app carimbado com o convite`() = runBlocking<Unit> {
         val admin = pair(adminCode, "Edson")
         val inv = invite(admin.token, name = "Vó Maria")

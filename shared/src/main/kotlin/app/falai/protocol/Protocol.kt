@@ -17,7 +17,7 @@ import kotlinx.serialization.json.Json
 const val PROTOCOL_VERSION = 1
 
 /** Versão do Falaí (servidor e página web). O app usa a do build.gradle. */
-const val FALAI_VERSION = "0.9.2"
+const val FALAI_VERSION = "0.9.3"
 
 val FalaiJson = Json {
     classDiscriminator = "type"
@@ -285,7 +285,13 @@ data class HelloFrame(
     val publicBase: String? = null,
     /** Só para o administrador: o "ajudante de chamadas" (TURN da Cloudflare) está configurado. */
     val turnConfigured: Boolean? = null,
+    /** O app do Falaí que está no servidor para baixar (para o app saber se tem versão nova). */
+    val app: AppApkInfo? = null,
 ) : ServerFrame
+
+/** Chegou uma versão nova do app no servidor: os celulares mostram "Atualizar". */
+@Serializable @SerialName("app_update")
+data class AppUpdateFrame(val app: AppApkInfo) : ServerFrame
 
 @Serializable @SerialName("ack")
 data class AckFrame(val id: String, val seq: Long, val createdAt: Long) : ServerFrame

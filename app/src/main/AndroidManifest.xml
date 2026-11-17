@@ -18,6 +18,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Atualizar o Falaí pelo próprio Falaí (botão "Atualizar"). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- A câmera é opcional: celulares sem câmera também instalam. -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.front" android:required="false" />
@@ -86,6 +88,11 @@
         <!-- Botões "Recusar" e "Desligar" dos avisos. -->
         <receiver
             android:name=".call.CallActionReceiver"
+            android:exported="false" />
+
+        <!-- Resposta do instalador do Android (botão "Atualizar"). -->
+        <receiver
+            android:name=".AppUpdater$ResultReceiver"
             android:exported="false" />
 
         <provider
