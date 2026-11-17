@@ -2,7 +2,7 @@
 
 Mensageiro da família. Um celular antigo fica em casa como servidor, e os celulares e tablets da família se conectam a ele pela internet através do Cloudflare Tunnel.
 
-## Estado atual: 0.9 (cara profissional)
+## Estado atual: 0.10 (grupos completos, responder, reagir, tiques, modo escuro)
 
 | Parte | O que faz | Testado |
 |---|---|---|
@@ -51,6 +51,14 @@ Mensageiro da família. Um celular antigo fica em casa como servidor, e os celul
 - **Fundo das conversas:** cor calma com desenhinhos clarinhos (7 cores, desenhos liga/desliga, ou uma foto da galeria). *Configurações → Fundo das conversas* (no computador, na engrenagem).
 - **Ícone próprio** (balão com a família dentro) no app, no servidor, nos avisos, na tela de abertura; favicon, ícone de "instalar" e página do convite com a marca no computador.
 - Configurações mais limpas: só conexão e versão.
+
+**0.10:**
+- **Mexer no grupo** (celular: toque no nome do grupo ou ⋮ → *Dados do grupo*; computador: clique no nome): nome, foto (com ajuste), pôr pessoas, tirar (quem criou ou o administrador) e sair. Quem sai continua lendo as antigas, mas não escreve. Avisos no meio da conversa ("Ana adicionou Bia").
+- **Computador cria conversa e grupo** (botão ✏️ no topo da lista).
+- **Responder, reagir e apagar para todos**: segurar a mensagem no celular; no computador, botão ⌄ ou clique direito.
+- **Tiques**: ✓ enviada, ✓✓ cinza entregue, ✓✓ azul lida (no grupo: quando todos).
+- **Modo escuro**: *Configurações → Aparência* (igual ao celular/computador, claro ou escuro).
+- Protocolo 2 (`/ws?p=2`); aparelhos com app antigo continuam funcionando (não veem reações; apagada aparece como "🚫 Mensagem apagada").
 
 Ainda não tem: notificações pelo Google (FCM), editor de vídeo, criptografia no app.
 

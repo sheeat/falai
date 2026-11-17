@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -37,32 +38,81 @@ import app.falai.client.FalaiClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/** Cores próprias do Falaí: azul-petróleo, calmo e moderno (sem parecer cópia de outro app). */
+/**
+ * Cores próprias do Falaí: azul-petróleo, calmo e moderno (sem parecer cópia de outro app).
+ * Cada cor tem a versão clara e a escura; [dark] diz qual está valendo (veja [ThemePrefs]).
+ */
 object FalaiColors {
-    val Primary = Color(0xFF136F7A)
-    val PrimaryDark = Color(0xFF0B4F57)
-    val ChatBg = Color(0xFFECF3F3)
-    val BubbleOut = Color(0xFFCFEDEF)
-    val BubbleIn = Color(0xFFFFFFFF)
-    val TextSec = Color(0xFF5B6B6E)
-    val Online = Color(0xFF2E9E5B)
-    val Warning = Color(0xFFD08A00)
-    val Error = Color(0xFFC62828)
-    val Divider = Color(0xFFDCE6E7)
+    var dark by mutableStateOf(false)
+    private fun c(light: Long, night: Long) = Color(if (dark) night else light)
+
+    val Primary get() = c(0xFF136F7A, 0xFF2A9AA6)
+    val PrimaryDark get() = c(0xFF0B4F57, 0xFF1B6F78)
+    /** Faixa do topo das telas. */
+    val Header get() = c(0xFF136F7A, 0xFF16363B)
+    val ChatBg get() = c(0xFFECF3F3, 0xFF0B1416)
+    val BubbleOut get() = c(0xFFCFEDEF, 0xFF145058)
+    val BubbleIn get() = c(0xFFFFFFFF, 0xFF1F2B2E)
+    /** Fundo das telas (era branco). */
+    val Surface get() = c(0xFFFFFFFF, 0xFF121B1D)
+    val Text get() = c(0xFF1B1F20, 0xFFE3ECED)
+    val TextSec get() = c(0xFF5B6B6E, 0xFF9DB0B3)
+    val Online get() = c(0xFF2E9E5B, 0xFF43B871)
+    val Warning get() = c(0xFFD08A00, 0xFFE0A030)
+    val Error get() = c(0xFFC62828, 0xFFEF6461)
+    val Divider get() = c(0xFFDCE6E7, 0xFF2A3A3D)
+    /** Faixa "versão nova". */
+    val Highlight get() = c(0xFFE3F1E8, 0xFF1C3A2B)
+    /** ✓✓ azul: a pessoa leu. */
+    val ReadTick get() = c(0xFF1E88E5, 0xFF5DB3FF)
+}
+
+/** Claro, escuro ou igual ao celular. Guardado neste aparelho. */
+object ThemePrefs {
+    const val AUTO = "auto"
+    const val LIGHT = "claro"
+    const val DARK = "escuro"
+    val mode = mutableStateOf<String?>(null)
+    private fun prefs(c: android.content.Context) = c.getSharedPreferences("falai", android.content.Context.MODE_PRIVATE)
+    fun load(c: android.content.Context): String = mode.value ?: (prefs(c).getString("tema", AUTO) ?: AUTO).also { mode.value = it }
+    fun set(c: android.content.Context, m: String) { prefs(c).edit().putString("tema", m).apply(); mode.value = m }
 }
 
 @Composable
 fun FalaiTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = lightColorScheme(
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val system = androidx.compose.foundation.isSystemInDarkTheme()
+    val mode = ThemePrefs.mode.value ?: ThemePrefs.load(context)
+    val dark = when (mode) { ThemePrefs.DARK -> true; ThemePrefs.LIGHT -> false; else -> system }
+    if (FalaiColors.dark != dark) FalaiColors.dark = dark
+    val scheme = if (dark) {
+        darkColorScheme(
+            primary = FalaiColors.Primary,
+            onPrimary = Color.White,
+            secondary = FalaiColors.PrimaryDark,
+            background = FalaiColors.Surface,
+            surface = Color(0xFF1A2629),
+            surfaceContainer = Color(0xFF1A2629),
+            surfaceContainerHigh = Color(0xFF223033),
+            onBackground = FalaiColors.Text,
+            onSurface = FalaiColors.Text,
+            onSurfaceVariant = FalaiColors.TextSec,
+        )
+    } else {
+        lightColorScheme(
             primary = FalaiColors.Primary,
             onPrimary = Color.White,
             secondary = FalaiColors.PrimaryDark,
             background = Color.White,
             surface = Color.White,
-        ),
-        content = content,
-    )
+        )
+    }
+    MaterialTheme(colorScheme = scheme) {
+        androidx.compose.runtime.CompositionLocalProvider(
+            androidx.compose.material3.LocalContentColor provides FalaiColors.Text,
+            content = content,
+        )
+    }
 }
 
 /**
@@ -209,7 +259,7 @@ fun SettingsButton(onClick: () -> Unit, color: Color = Color.White) {
             }
             // Corpo (anel)
             drawCircle(color, radius = ring, center = c)
-            drawCircle(FalaiColors.Primary, radius = ring * 0.45f, center = c)
+            drawCircle(FalaiColors.Header, radius = ring * 0.45f, center = c)
         }
     }
 }

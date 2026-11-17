@@ -23,7 +23,7 @@ const val PROTOCOL_VERSION = 2
 const val CLIENT_PROTOCOL_PARAM = "p"
 
 /** Versão do Falaí (servidor e página web). O app usa a do build.gradle. */
-const val FALAI_VERSION = "0.9.4"
+const val FALAI_VERSION = "0.10.0"
 
 val FalaiJson = Json {
     classDiscriminator = "type"

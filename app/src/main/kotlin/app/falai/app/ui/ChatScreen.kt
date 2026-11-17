@@ -104,6 +104,26 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
     // A conversa foi apagada (por exemplo, no computador): volta para a lista.
     LaunchedEffect(summary == null) { if (summary == null) onBack() }
     val listState = rememberLazyListState()
+    val isGroup = summary?.kind == "group"
+    // Saí (ou me tiraram) do grupo: dá para ler, mas não escrever.
+    val readOnly = summary != null && !summary.iAmMember
+    var replyTo by remember { mutableStateOf<LocalMessage?>(null) }
+    var groupInfo by remember { mutableStateOf(false) }
+    val byId = remember(messages) { messages.associateBy { it.id } }
+    // Tiques ✓✓: quem mais está na conversa e até onde cada um recebeu/leu.
+    val others = remember(changes) { client.store.memberIds(conversationId).filter { it != me } }
+    val receipts = remember(changes) { client.store.receipts(conversationId) }
+    fun tick(m: LocalMessage): MessageStatus {
+        val seq = m.seq
+        if (m.status != MessageStatus.SENT || seq == null || m.authorId != me || others.isEmpty()) return m.status
+        return when {
+            others.all { (receipts[it]?.readSeq ?: 0) >= seq } -> MessageStatus.READ
+            others.all { (receipts[it]?.deliveredSeq ?: 0) >= seq } -> MessageStatus.DELIVERED
+            else -> m.status
+        }
+    }
+    // Conversa aberta na tela: avisa que li (✓✓ azul para quem mandou).
+    LaunchedEffect(messages.size, state) { client.markRead(conversationId) }
 
     // ---------- Anexar ----------
 
@@ -272,11 +292,15 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
     ) {
     Column(Modifier.fillMaxSize().background(FalaiColors.ChatBg).imePadding()) {
         Row(
-            Modifier.fillMaxWidth().background(FalaiColors.Primary).statusBarsPadding()
+            Modifier.fillMaxWidth().background(FalaiColors.Header).statusBarsPadding()
                 .padding(horizontal = 4.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             BackButton(onClick = onBack)
+            Row(
+                Modifier.weight(1f).then(if (isGroup) Modifier.clickable { groupInfo = true } else Modifier),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
             Avatar(summary?.displayName ?: "?", size = 38.dp, client = client, mediaId = summary?.avatarMediaId)
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
@@ -285,10 +309,16 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
                     fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
                 if (otherLeft) Text("saiu da família", color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
+                else if (readOnly) Text("você não está mais no grupo", color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
+                else if (isGroup) Text(
+                    "${summary?.memberIds?.size ?: 0} pessoas · toque para ver", color = Color.White.copy(alpha = 0.85f),
+                    fontSize = 12.sp, maxLines = 1,
+                )
                 else ConnectionBadge(state)
             }
+            }
             // Chamadas: voz e vídeo.
-            val online = state == app.falai.client.ConnectionState.ONLINE && !otherLeft
+            val online = state == app.falai.client.ConnectionState.ONLINE && !otherLeft && !readOnly
             val callBusy = ongoingCall != null
             TextButton(enabled = online && !callBusy, onClick = { askCall(false) { calls.start(conversationId, false) } }) {
                 Text("📞", fontSize = 22.sp, color = Color.White.copy(alpha = if (online && !callBusy) 1f else 0.4f))
@@ -302,6 +332,12 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
                     Text("⋮", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
                 }
                 DropdownMenu(expanded = chatMenuOpen, onDismissRequest = { chatMenuOpen = false }) {
+                    if (isGroup) {
+                        DropdownMenuItem(
+                            text = { Text("👥  Dados do grupo") },
+                            onClick = { chatMenuOpen = false; groupInfo = true },
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text("🗑️  Apagar conversa", color = FalaiColors.Error) },
                         onClick = { chatMenuOpen = false; confirmDelete = true },
@@ -346,7 +382,6 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
             }
         }
 
-        val isGroup = summary?.kind == "group"
         ChatBackground(Modifier.weight(1f).fillMaxWidth()) {
         LazyColumn(
             state = listState,
@@ -355,19 +390,36 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             items(messages, key = { it.id }) { m ->
-                Bubble(
-                    client, m,
-                    mine = m.authorId == me,
-                    authorName = if (isGroup) client.store.userName(m.authorId) else null,
-                    uploadProgress = progress[m.id],
-                )
+                if (m.isSystem) {
+                    SystemNotice(m.body)
+                } else {
+                    Bubble(
+                        client, m,
+                        mine = m.authorId == me,
+                        authorName = if (isGroup) client.store.userName(m.authorId) else null,
+                        uploadProgress = progress[m.id],
+                        status = tick(m),
+                        replied = m.replyToId?.let { id -> byId[id] ?: MISSING_REPLY },
+                        me = me,
+                        onReplyClick = { id ->
+                            val i = messages.indexOfFirst { it.id == id }
+                            if (i >= 0) scope.launch { listState.animateScrollToItem(i) }
+                        },
+                    )
+                }
             }
         }
         }
 
-        if (recording) {
+        if (readOnly) {
+            Text(
+                "Você não está mais neste grupo. Dá para ler as mensagens antigas, mas não escrever.",
+                color = FalaiColors.TextSec, fontSize = 14.sp,
+                modifier = Modifier.fillMaxWidth().background(FalaiColors.Surface).navigationBarsPadding().padding(16.dp),
+            )
+        } else if (recording) {
             Row(
-                Modifier.fillMaxWidth().background(Color.White).navigationBarsPadding().padding(12.dp),
+                Modifier.fillMaxWidth().background(FalaiColors.Surface).navigationBarsPadding().padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text("●", color = FalaiColors.Error, fontSize = 18.sp)
@@ -391,6 +443,18 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
                 }) { Text("Enviar") }
             }
         } else {
+            replyTo?.let { r ->
+                Row(
+                    Modifier.fillMaxWidth().background(FalaiColors.Surface).padding(start = 12.dp, end = 4.dp, top = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ReplyQuote(
+                        if (r.authorId == me) "Você" else client.store.userName(r.authorId) ?: "Alguém",
+                        quoteText(r), Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { replyTo = null }) { Text("✕", fontSize = 18.sp, color = FalaiColors.TextSec) }
+                }
+            }
             Row(
                 Modifier.fillMaxWidth().navigationBarsPadding().padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -425,7 +489,7 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
                     placeholder = { Text("Mensagem") },
                     shape = RoundedCornerShape(24.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        unfocusedContainerColor = Color.White, focusedContainerColor = Color.White,
+                        unfocusedContainerColor = FalaiColors.Surface, focusedContainerColor = FalaiColors.Surface,
                     ),
                     maxLines = 5,
                     modifier = Modifier.weight(1f),
@@ -443,8 +507,9 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
                 } else {
                     Button(
                         onClick = {
-                            client.send(conversationId, text)
+                            client.send(conversationId, text, replyTo?.id)
                             text = ""
+                            replyTo = null
                         },
                         shape = RoundedCornerShape(24.dp),
                     ) { Text("Enviar") }
@@ -477,6 +542,31 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
     actionsFor?.let { m ->
         MessageActionsDialog(
             m,
+            mine = m.authorId == me,
+            canWrite = !readOnly && !otherLeft,
+            myReaction = m.reactions[me],
+            onReply = { actionsFor = null; replyTo = m },
+            onReact = { emoji ->
+                actionsFor = null
+                scope.launch {
+                    try {
+                        client.react(conversationId, m.id, if (m.reactions[me] == emoji) "" else emoji)
+                    } catch (e: Exception) {
+                        Toast.makeText(context, e.message ?: "Não deu para reagir agora.", Toast.LENGTH_LONG).show()
+                    }
+                }
+            },
+            onDeleteForEveryone = {
+                actionsFor = null
+                scope.launch {
+                    try {
+                        client.deleteForEveryone(m)
+                        if (replyTo?.id == m.id) replyTo = null
+                    } catch (e: Exception) {
+                        Toast.makeText(context, e.message ?: "Não deu para apagar agora.", Toast.LENGTH_LONG).show()
+                    }
+                }
+            },
             onDismiss = { actionsFor = null },
             onSave = { actionsFor = null; save(m) },
             onForward = { actionsFor = null; forwardFor = m },
@@ -488,6 +578,9 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
                 Toast.makeText(context, "Texto copiado", Toast.LENGTH_SHORT).show()
             },
         )
+    }
+    if (groupInfo && summary != null && isGroup) {
+        GroupInfoScreen(client, summary, onBack = { groupInfo = false })
     }
     forwardFor?.let { m ->
         ForwardDialog(
@@ -505,38 +598,120 @@ private val LocalOpenMedia = staticCompositionLocalOf<(File, LocalMessage) -> Un
 /** Segurar o dedo numa mensagem abre o menu (salvar, encaminhar, compartilhar). */
 private val LocalMessageLongPress = staticCompositionLocalOf<(LocalMessage) -> Unit> { { } }
 
+/** Resposta a uma mensagem que já não está aqui (apagada desta conversa). */
+private val MISSING_REPLY = LocalMessage("", null, "", "", "Mensagem antiga", 0, MessageStatus.RECEIVED)
+
+/** Texto curto da mensagem citada numa resposta. */
+fun quoteText(m: LocalMessage): String =
+    if (m.deleted) ClientStore.DELETED_LABEL else ClientStore.preview(m.body, m.attachment).ifBlank { "Mensagem" }
+
+/** A citação (nome em cor + começo da mensagem), dentro do balão ou em cima da caixa de escrever. */
+@Composable
+fun ReplyQuote(name: String, text: String, modifier: Modifier = Modifier) {
+    Row(
+        modifier.clip(RoundedCornerShape(8.dp)).background(FalaiColors.Primary.copy(alpha = 0.12f)),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.width(4.dp).height(40.dp).background(FalaiColors.Primary))
+        Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+            Text(name, color = FalaiColors.Primary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Text(text, color = FalaiColors.TextSec, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+/** Aviso do grupo ("Ana adicionou Bia"), no meio, sem balão. */
+@Composable
+private fun SystemNotice(text: String) {
+    Box(Modifier.fillMaxWidth().padding(vertical = 4.dp), contentAlignment = Alignment.Center) {
+        Text(
+            text, fontSize = 13.sp, color = FalaiColors.TextSec,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier
+                .widthIn(max = 320.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(FalaiColors.Surface.copy(alpha = 0.9f))
+                .padding(horizontal = 12.dp, vertical = 5.dp),
+        )
+    }
+}
+
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun Bubble(client: FalaiClient, m: LocalMessage, mine: Boolean, authorName: String?, uploadProgress: Float?) {
+private fun Bubble(
+    client: FalaiClient, m: LocalMessage, mine: Boolean, authorName: String?, uploadProgress: Float?,
+    status: MessageStatus, replied: LocalMessage?, me: String, onReplyClick: (String) -> Unit,
+) {
     val longPress = LocalMessageLongPress.current
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start) {
+        Column(horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
         Column(
             Modifier
                 .widthIn(max = 300.dp)
                 .clip(RoundedCornerShape(12.dp))
                 .background(if (mine) FalaiColors.BubbleOut else FalaiColors.BubbleIn)
-                .combinedClickable(onClick = {}, onLongClick = { longPress(m) })
+                .combinedClickable(onClick = {}, onLongClick = { if (!m.deleted) longPress(m) })
                 .padding(horizontal = 8.dp, vertical = 6.dp)
         ) {
             if (!mine && authorName != null) {
                 Text(authorName, color = FalaiColors.Primary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             }
-            if (m.attachment != null) {
-                AttachmentView(client, m)
-                if (uploadProgress != null && m.status == MessageStatus.PENDING) {
-                    Spacer(Modifier.height(4.dp))
-                    LinearProgressIndicator(progress = { uploadProgress }, modifier = Modifier.width(200.dp))
-                    Text("Enviando ${(uploadProgress * 100).toInt()}%", fontSize = 11.sp, color = FalaiColors.TextSec)
+            if (m.deleted) {
+                Text(
+                    ClientStore.DELETED_LABEL, fontSize = 15.sp, color = FalaiColors.TextSec,
+                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic, modifier = Modifier.padding(horizontal = 2.dp),
+                )
+            } else {
+                if (replied != null) {
+                    val who = when {
+                        replied.id.isEmpty() -> ""
+                        replied.authorId == me -> "Você"
+                        else -> client.store.userName(replied.authorId) ?: "Alguém"
+                    }
+                    ReplyQuote(
+                        who, quoteText(replied),
+                        Modifier.padding(bottom = 4.dp).widthIn(min = 120.dp)
+                            .clickable(enabled = replied.id.isNotEmpty()) { onReplyClick(replied.id) },
+                    )
                 }
+                if (m.attachment != null) {
+                    AttachmentView(client, m)
+                    if (uploadProgress != null && m.status == MessageStatus.PENDING) {
+                        Spacer(Modifier.height(4.dp))
+                        LinearProgressIndicator(progress = { uploadProgress }, modifier = Modifier.width(200.dp))
+                        Text("Enviando ${(uploadProgress * 100).toInt()}%", fontSize = 11.sp, color = FalaiColors.TextSec)
+                    }
+                }
+                if (m.body.isNotEmpty()) Text(m.body, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 2.dp))
             }
-            if (m.body.isNotEmpty()) Text(m.body, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 2.dp))
             Row(Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically) {
                 Text(formatTime(m.createdAt), color = FalaiColors.TextSec, fontSize = 11.sp)
-                if (mine) {
+                if (mine && !m.deleted) {
                     Spacer(Modifier.width(4.dp))
-                    Text(statusIcon(m.status), fontSize = 11.sp, color = FalaiColors.TextSec)
+                    Text(
+                        statusIcon(status), fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                        color = if (status == MessageStatus.READ) FalaiColors.ReadTick else FalaiColors.TextSec,
+                    )
                 }
             }
+        }
+        // Reações embaixo do balão: "❤️ 2  😂".
+        if (m.reactions.isNotEmpty() && !m.deleted) {
+            val counts = m.reactions.values.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }
+            Row(
+                Modifier
+                    .padding(horizontal = 6.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(FalaiColors.Surface)
+                    .clickable { longPress(m) }
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                for ((emoji, n) in counts) {
+                    Text(if (n > 1) "$emoji $n" else emoji, fontSize = 14.sp)
+                }
+            }
+        }
         }
     }
 }

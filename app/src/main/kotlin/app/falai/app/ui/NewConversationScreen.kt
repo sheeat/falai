@@ -57,9 +57,9 @@ fun NewConversationScreen(client: FalaiClient, onBack: () -> Unit, onCreated: (S
     // Atualiza a lista de pessoas (alguém pode ter entrado na família agora).
     LaunchedEffect(Unit) { runCatching { client.refreshUsers() } }
 
-    Column(Modifier.fillMaxSize().background(Color.White)) {
+    Column(Modifier.fillMaxSize().background(FalaiColors.Surface)) {
         Row(
-            Modifier.fillMaxWidth().background(FalaiColors.Primary).statusBarsPadding()
+            Modifier.fillMaxWidth().background(FalaiColors.Header).statusBarsPadding()
                 .padding(horizontal = 4.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -95,7 +95,7 @@ fun NewConversationScreen(client: FalaiClient, onBack: () -> Unit, onCreated: (S
                     // "Novo grupo": liga a escolha de várias pessoas.
                     Row(
                         Modifier.fillMaxWidth()
-                            .background(if (groupMode) FalaiColors.ChatBg else Color.White)
+                            .background(if (groupMode) FalaiColors.ChatBg else FalaiColors.Surface)
                             .clickable { groupMode = !groupMode; selected.clear() }
                             .padding(horizontal = 16.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,

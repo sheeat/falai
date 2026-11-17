@@ -80,7 +80,7 @@ fun UpdateBanner(client: FalaiClient, modifier: Modifier = Modifier) {
     }
 
     Column(
-        modifier.fillMaxWidth().background(Color(0xFFE3F1E8)).padding(horizontal = 16.dp, vertical = 10.dp),
+        modifier.fillMaxWidth().background(FalaiColors.Highlight).padding(horizontal = 16.dp, vertical = 10.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {

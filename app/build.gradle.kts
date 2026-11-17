@@ -12,8 +12,8 @@ android {
         applicationId = "app.falai"
         minSdk = 28
         targetSdk = 36
-        versionCode = 22
-        versionName = "0.9.4"
+        versionCode = 23
+        versionName = "0.10.0"
     }
 
     buildTypes {

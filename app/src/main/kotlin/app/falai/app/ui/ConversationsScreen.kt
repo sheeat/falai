@@ -55,13 +55,13 @@ fun ConversationsScreen(
     val list = remember(changes) { client.store.conversationSummaries(me) }
     var deleting by remember { mutableStateOf<ConversationSummary?>(null) }
 
-    Box(Modifier.fillMaxSize().background(Color.White)) {
+    Box(Modifier.fillMaxSize().background(FalaiColors.Surface)) {
         Column(Modifier.fillMaxSize()) {
             // Topo
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .background(FalaiColors.Primary)
+                    .background(FalaiColors.Header)
                     .statusBarsPadding()
                     .padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 10.dp)
             ) {
@@ -165,6 +165,7 @@ private fun ConversationRow(client: FalaiClient, c: ConversationSummary, me: Str
 fun statusIcon(s: MessageStatus?): String = when (s) {
     MessageStatus.PENDING -> "🕓"
     MessageStatus.SENT -> "✓"
+    MessageStatus.DELIVERED, MessageStatus.READ -> "✓✓"
     MessageStatus.FAILED -> "⚠️"
     else -> ""
 }

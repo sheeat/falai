@@ -146,6 +146,8 @@ fun ChatBackground(modifier: Modifier = Modifier, choice: WallpaperChoice? = nul
             // Um véu claro por cima da foto, para as mensagens aparecerem bem.
             Box(Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.18f)))
         }
+        // Modo escuro: escurece o fundo escolhido (cor, desenhos ou foto).
+        if (FalaiColors.dark) Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.62f)))
         content()
     }
 }
@@ -180,9 +182,9 @@ fun WallpaperScreen(onBack: () -> Unit) {
         }
     }
 
-    Column(Modifier.fillMaxSize().background(Color.White)) {
+    Column(Modifier.fillMaxSize().background(FalaiColors.Surface)) {
         Row(
-            Modifier.fillMaxWidth().background(FalaiColors.Primary).statusBarsPadding().padding(horizontal = 4.dp, vertical = 8.dp),
+            Modifier.fillMaxWidth().background(FalaiColors.Header).statusBarsPadding().padding(horizontal = 4.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             BackButton(onClick = onBack)

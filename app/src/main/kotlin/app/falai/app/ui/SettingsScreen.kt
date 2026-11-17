@@ -120,9 +120,9 @@ fun SettingsScreen(client: FalaiClient, onBack: () -> Unit, onInvite: () -> Unit
     }
 
     Box(Modifier.fillMaxSize()) {
-    Column(Modifier.fillMaxSize().background(Color.White).imePadding()) {
+    Column(Modifier.fillMaxSize().background(FalaiColors.Surface).imePadding()) {
         Row(
-            Modifier.fillMaxWidth().background(FalaiColors.Primary).statusBarsPadding()
+            Modifier.fillMaxWidth().background(FalaiColors.Header).statusBarsPadding()
                 .padding(horizontal = 4.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -195,6 +195,23 @@ fun SettingsScreen(client: FalaiClient, onBack: () -> Unit, onInvite: () -> Unit
             Text("Conversas", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
             OutlinedButton(onClick = onWallpaper, modifier = Modifier.fillMaxWidth().height(48.dp)) {
                 Text("🎨  Fundo das conversas")
+            }
+
+            // ---- Aparência ----
+            HorizontalDivider(color = FalaiColors.Divider)
+            Text("Aparência", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+            val mode = ThemePrefs.mode.value ?: ThemePrefs.AUTO
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for ((id, label) in listOf(ThemePrefs.AUTO to "📱 Igual ao celular", ThemePrefs.LIGHT to "☀️ Claro", ThemePrefs.DARK to "🌙 Escuro")) {
+                    val on = mode == id
+                    OutlinedButton(
+                        onClick = { ThemePrefs.set(context, id) },
+                        colors = if (on) ButtonDefaults.outlinedButtonColors(containerColor = FalaiColors.Primary, contentColor = Color.White)
+                        else ButtonDefaults.outlinedButtonColors(),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp),
+                        modifier = Modifier.weight(1f).height(52.dp),
+                    ) { Text(label, fontSize = 13.sp, textAlign = TextAlign.Center, maxLines = 2) }
+                }
             }
 
             // ---- Chamadas ----
