@@ -59,9 +59,16 @@ fun NewConversationScreen(client: FalaiClient, onBack: () -> Unit, onCreated: (S
             verticalAlignment = Alignment.CenterVertically,
         ) {
             BackButton(onClick = onBack)
-            Text("Nova conversa", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
+            Text("Nova conversa ou grupo", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
         }
 
+        if (people.isNotEmpty()) {
+            Text(
+                "Toque em uma pessoa para conversar. Para criar um grupo, marque várias pessoas.",
+                color = FalaiColors.TextSec, fontSize = 14.sp,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
+            )
+        }
         if (people.isEmpty()) {
             Text(
                 "Ainda não tem mais ninguém na família. Use \"Convidar\" na tela inicial.",
@@ -117,7 +124,7 @@ fun NewConversationScreen(client: FalaiClient, onBack: () -> Unit, onCreated: (S
                     }
                 },
                 modifier = Modifier.fillMaxWidth().height(50.dp),
-            ) { Text(if (isGroup) "Criar grupo" else "Conversar") }
+            ) { Text(if (isGroup) "Criar grupo com ${selected.size} pessoas" else "Conversar") }
         }
     }
 }

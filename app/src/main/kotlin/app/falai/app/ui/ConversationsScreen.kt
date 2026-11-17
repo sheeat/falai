@@ -108,7 +108,7 @@ fun ConversationsScreen(
             if (list.isEmpty()) {
                 Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
                     Text(
-                        "Nenhuma conversa ainda.\nToque em \"Nova conversa\" para começar.",
+                        "Nenhuma conversa ainda.\nToque em \"Nova conversa ou grupo\" para começar.",
                         color = FalaiColors.TextSec, textAlign = TextAlign.Center,
                     )
                 }
@@ -127,7 +127,7 @@ fun ConversationsScreen(
             containerColor = FalaiColors.Primary,
             contentColor = Color.White,
             modifier = Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(20.dp),
-        ) { Text("Nova conversa") }
+        ) { Text("Nova conversa ou grupo") }
     }
     deleting?.let { c -> DeleteConversationDialog(client, c) { deleting = null } }
 }
