@@ -117,12 +117,12 @@ class FalaiClient(
      * Troca o código de convite por uma conta neste aparelho. Se a internet oscilar, tenta de novo
      * sozinho; o servidor reconhece a repetição e o convite não se perde.
      */
-    suspend fun pair(serverUrl: String, code: String, deviceName: String, userName: String?): Account =
+    suspend fun pair(serverUrl: String, code: String, deviceName: String, userName: String?, installKey: String? = null): Account =
         withContext(Dispatchers.IO) {
             val base = normalizeUrl(serverUrl)
             val cleanCode = code.trim()
             val attemptId = pairAttempts.getOrPut(cleanCode.uppercase().filter { it.isLetterOrDigit() }) { UUID.randomUUID().toString() }
-            val body = FalaiJson.encodeToString(PairRequest.serializer(), PairRequest(cleanCode, deviceName, userName, attemptId))
+            val body = FalaiJson.encodeToString(PairRequest.serializer(), PairRequest(cleanCode, deviceName, userName, attemptId, installKey))
             val req = Request.Builder()
                 .url("$base/api/pair")
                 .post(body.toRequestBody("application/json".toMediaType()))
@@ -144,11 +144,7 @@ class FalaiClient(
                         throw FalaiClientException(err?.error ?: "http_${r.code}", err?.message ?: "Erro do servidor (${r.code}).")
                     }
                     val p = FalaiJson.decodeFromString(PairResponse.serializer(), text)
-                    val acc = Account(base, p.token, p.userId, p.deviceId, p.isAdmin)
-                    store.saveAccount(acc)
-                    _me.value = acc
-                    bump()
-                    acc
+                    saveAccountFrom(base, p)
                 }
             }
             throw FalaiClientException(
@@ -156,6 +152,48 @@ class FalaiClient(
                 "Não consegui falar com o servidor (${lastError?.message ?: "sem resposta"}). Confira o endereço e a internet e tente de novo com o mesmo código.",
             )
         }
+
+    private fun saveAccountFrom(base: String, p: PairResponse): Account {
+        val acc = Account(base, p.token, p.userId, p.deviceId, p.isAdmin)
+        store.saveAccount(acc)
+        p.userName?.let { store.upsertUser(UserDto(p.userId, it, p.isAdmin)) }
+        _me.value = acc
+        bump()
+        return acc
+    }
+
+    /**
+     * O app foi instalado de novo num aparelho que o servidor já conhece ([installKey] igual):
+     * entra direto na conta da pessoa, sem convite. Devolve o nome da pessoa, ou null se o
+     * servidor não conhece este aparelho (aí precisa de convite).
+     */
+    suspend fun reconnect(serverUrl: String, installKey: String, deviceName: String): String? = withContext(Dispatchers.IO) {
+        val base = normalizeUrl(serverUrl)
+        val body = FalaiJson.encodeToString(
+            app.falai.protocol.ReconnectRequest.serializer(), app.falai.protocol.ReconnectRequest(installKey, deviceName),
+        )
+        val req = Request.Builder().url("$base/api/reconnect").post(body.toRequestBody("application/json".toMediaType())).build()
+        val resp = try {
+            mediaHttp.newCall(req).execute()
+        } catch (e: IOException) {
+            throw FalaiClientException("network", "Não consegui falar com o servidor. Confira a internet.")
+        }
+        resp.use { r ->
+            val text = r.body?.string().orEmpty()
+            when {
+                r.code == 404 -> null
+                !r.isSuccessful -> {
+                    val err = runCatching { FalaiJson.decodeFromString(ErrorResponse.serializer(), text) }.getOrNull()
+                    throw FalaiClientException(err?.error ?: "http_${r.code}", err?.message ?: "Erro do servidor (${r.code}).")
+                }
+                else -> {
+                    val p = FalaiJson.decodeFromString(PairResponse.serializer(), text)
+                    saveAccountFrom(base, p)
+                    p.userName ?: ""
+                }
+            }
+        }
+    }
 
     // ---------- Arquivo do app (para quem for convidado baixar) ----------
 
@@ -228,6 +266,11 @@ class FalaiClient(
      * [force] = true (botão "Reconectar"): derruba e refaz a conexão mesmo se parecer online.
      */
     fun reconnectNow(force: Boolean = false) {
+        // Desligado pelo servidor (ex.: tirado da família e trazido de volta): tenta de novo do zero.
+        if (loop?.isActive != true && store.account() != null) {
+            start()
+            return
+        }
         if (force || _connection.value != ConnectionState.ONLINE) socket?.cancel()
         wake.trySend(Unit)
         uploadWake.trySend(Unit)
@@ -245,7 +288,7 @@ class FalaiClient(
         val events = Channel<Event>(Channel.UNLIMITED)
         val timedOut = java.util.concurrent.atomic.AtomicBoolean(false)
         val req = Request.Builder()
-            .url("${acc.serverUrl}/ws")
+            .url("${acc.serverUrl}/ws?${app.falai.protocol.CLIENT_PROTOCOL_PARAM}=${app.falai.protocol.PROTOCOL_VERSION}")
             .header("Authorization", "Bearer ${acc.token}")
             .build()
         val ws = http.newWebSocket(req, object : WebSocketListener() {
@@ -320,7 +363,13 @@ class FalaiClient(
         when (f) {
             is HelloFrame -> {
                 store.upsertUser(f.user)
-                f.conversations.forEach(store::upsertConversation)
+                // A lista do servidor é a verdade: conversa apagada em outro aparelho some daqui também.
+                val keep = f.conversations.map { it.id }.toSet()
+                store.conversationIds().filter { it !in keep }.forEach(store::deleteConversation)
+                f.conversations.forEach {
+                    store.upsertConversation(it)
+                    it.clearedSeq?.let { s -> store.clearMessagesUpTo(it.id, s) }
+                }
                 if (f.user.isAdmin != acc.isAdmin) {
                     val updated = acc.copy(isAdmin = f.user.isAdmin)
                     store.saveAccount(updated)
@@ -328,22 +377,42 @@ class FalaiClient(
                 }
                 _publicBase.value = f.publicBase
                 _turnConfigured.value = f.turnConfigured
+                _latestApp.value = f.app
                 // Chamadas: o servidor manda logo em seguida as que ainda estão em andamento.
                 _callEvents.tryEmit(f)
                 _connection.value = ConnectionState.ONLINE
+                // Mostra o cadeado deste aparelho (antes de mandar qualquer mensagem).
+                sendFrame(ws, app.falai.protocol.DeviceKeyFrame(keys.publicB64))
                 sendFrame(ws, ListUsersFrame("hello-users"))
                 sendFrame(ws, SyncFrame(store.syncedSeq()))
                 // Esvazia a fila: tudo que foi escrito sem conexão sai agora, na ordem.
-                store.pending().forEach { sendFrame(ws, SendFrame(it.id, it.conversationId, it.body, it.attachment)) }
+                store.pending().forEach { m -> frameFor(m)?.let { sendFrame(ws, it) } }
                 bump()
                 kickUploads()
             }
-            is AckFrame -> { store.markSent(f.id, f.seq, f.createdAt); bump() }
-            is MessageFrame -> { store.upsertFromServer(f.message, acc.userId); bump() }
-            is SyncBatchFrame -> { f.messages.forEach { store.upsertFromServer(it, acc.userId) }; bump() }
+            is AckFrame -> {
+                store.markSent(f.id, f.seq, f.createdAt)
+                pendingRequests.remove(f.id)?.complete(f)
+                bump()
+            }
+            is MessageFrame -> {
+                ingest(f.message, acc)
+                bump()
+                acknowledgeDelivery(ws, listOf(f.message), acc.userId)
+            }
+            is SyncBatchFrame -> {
+                f.messages.forEach { ingest(it, acc) }
+                bump()
+                acknowledgeDelivery(ws, f.messages, acc.userId)
+            }
+            is app.falai.protocol.ReceiptsFrame -> {
+                store.saveReceipt(f.conversationId, f.receipt)
+                bump()
+            }
             is SyncDoneFrame -> store.setSyncedSeq(maxOf(store.syncedSeq(), f.lastSeq))
             is ConversationFrame -> {
                 store.upsertConversation(f.conversation)
+                f.conversation.clearedSeq?.let { store.clearMessagesUpTo(f.conversation.id, it) }
                 bump()
                 f.requestId?.let { pendingRequests.remove(it)?.complete(f) }
                 // Conversa nova pode trazer gente que este aparelho ainda não conhece.
@@ -353,11 +422,21 @@ class FalaiClient(
             }
             is UsersFrame -> {
                 store.replaceUsers(f.users)
+                // Mensagens que voltaram porque tinha aparelho novo: tranca de novo, agora para todos.
+                val again = resealAfterUsers.toList()
+                resealAfterUsers.clear()
+                again.forEach { id -> store.messageById(id)?.takeIf { it.status == MessageStatus.PENDING }?.let { m -> frameFor(m)?.let { sendFrame(ws, it) } } }
                 bump()
                 pendingRequests.remove(f.requestId)?.complete(f)
             }
             is InviteFrame -> pendingRequests.remove(f.requestId)?.complete(f)
+            is app.falai.protocol.ConversationHiddenFrame -> {
+                store.deleteConversation(f.conversationId)
+                bump()
+                f.requestId?.let { pendingRequests.remove(it)?.complete(f) }
+            }
             is PongFrame -> pendingRequests.remove(f.requestId)?.complete(f)
+            is app.falai.protocol.AppUpdateFrame -> _latestApp.value = f.app
             is app.falai.protocol.WebApprovedFrame -> pendingRequests.remove(f.requestId)?.complete(f)
             is UserUpdatedFrame -> {
                 store.upsertUser(f.user)
@@ -384,6 +463,18 @@ class FalaiClient(
                 val waiting = f.requestId?.let { pendingRequests.remove(it) }
                 if (waiting != null) {
                     waiting.completeExceptionally(FalaiClientException(f.code, f.message))
+                } else if (f.requestId != null && f.code == "keys_changed") {
+                    // Apareceu aparelho novo na conversa: busca os cadeados e tranca de novo (até 3 vezes).
+                    val id = f.requestId!!
+                    val n = (resealTries[id] ?: 0) + 1
+                    resealTries[id] = n
+                    if (n <= 3) {
+                        resealAfterUsers.add(id)
+                        sendFrame(ws, ListUsersFrame("keys-$id"))
+                    } else {
+                        store.markFailed(id)
+                        bump()
+                    }
                 } else if (f.requestId != null && f.code in setOf("forbidden", "invalid", "too_large", "conflict")) {
                     // Mensagem recusada de vez: sai da fila e aparece como falha.
                     log("Mensagem ${f.requestId} recusada: ${f.message}")
@@ -394,17 +485,152 @@ class FalaiClient(
         }
     }
 
+    // ---------- Cadeado (criptografia de ponta a ponta) ----------
+
+    /** As chaves deste aparelho. */
+    private val keys: E2e.Keys by lazy { store.myKeys() }
+    private val resealAfterUsers = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val resealTries = ConcurrentHashMap<String, Int>()
+
+    /**
+     * A mensagem pronta para o servidor: o texto e o anexo vão trancados para todos os aparelhos da
+     * conversa (inclusive os meus). O servidor só vê o arquivo trancado, sem nome nem tipo.
+     */
+    private fun frameFor(m: LocalMessage): SendFrame? {
+        val acc = store.account() ?: return null
+        val att = m.attachment
+        if (att != null && att.mediaId.isEmpty()) return null
+        val publicAtt = att?.let {
+            if (it.key != null) app.falai.protocol.AttachmentDto(
+                mediaId = it.mediaId, kind = "file", mime = "application/octet-stream", name = "falai.enc",
+                size = it.encSize ?: 0, sha256 = it.encSha256.orEmpty(),
+            ) else it
+        }
+        val recipients = store.deviceKeysFor(m.conversationId) + (acc.deviceId to keys.publicB64)
+        val sealed = E2e.seal(app.falai.protocol.SealedPayload(m.body, att), m.id, m.conversationId, acc.deviceId, keys, recipients)
+        return SendFrame(m.id, m.conversationId, "", publicAtt, m.replyToId, sealed)
+    }
+
+    /** Guarda uma mensagem do servidor; se vier trancada, destranca aqui (só este aparelho consegue). */
+    private fun ingest(m: app.falai.protocol.MessageDto, acc: Account) {
+        val s = m.sealed
+        if (s == null || m.deleted || m.kind != null) {
+            store.upsertFromServer(m, acc.userId)
+            return
+        }
+        val p = E2e.open(s, m.id, m.conversationId, m.authorDeviceId, acc.deviceId, keys) { k ->
+            store.isKnownKey(m.authorDeviceId, k) || (m.authorDeviceId == acc.deviceId && k == keys.publicB64)
+        }
+        if (p == null) {
+            log("Mensagem ${m.id} trancada não abriu neste aparelho")
+            store.upsertUnreadable(m, acc.userId)
+            return
+        }
+        val att = p.attachment?.let { a ->
+            // O arquivo é o que o servidor confirmou; o resto (nome, tipo, chave) veio trancado.
+            a.copy(mediaId = m.attachment?.mediaId ?: a.mediaId, thumb = app.falai.protocol.sanitizeThumb(a.thumb))
+        }
+        store.upsertFromServer(m.copy(body = p.body, attachment = att, sealed = null), acc.userId)
+    }
+
     // ---------- Ações da tela ----------
 
     /** Escreve a mensagem no banco (aparece na hora com o relógio) e envia se estiver online. */
-    fun send(conversationId: String, body: String): LocalMessage {
+    fun send(conversationId: String, body: String, replyToId: String? = null): LocalMessage {
         val acc = store.account() ?: throw FalaiClientException("not_paired", "Aparelho não pareado.")
         val text = body.trim()
         require(text.isNotEmpty()) { "Mensagem vazia" }
-        val m = store.insertPending(UUID.randomUUID().toString(), conversationId, acc.userId, text)
+        val m = store.insertPending(UUID.randomUUID().toString(), conversationId, acc.userId, text, replyToId)
         bump()
-        if (_connection.value == ConnectionState.ONLINE) sendFrame(socket, SendFrame(m.id, m.conversationId, m.body))
+        if (_connection.value == ConnectionState.ONLINE) frameFor(m)?.let { sendFrame(socket, it) }
         return m
+    }
+
+    // ---------- Tiques ✓✓ ----------
+
+    private val deliveredSent = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val readSent = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /** Chegaram mensagens dos outros: avisa o servidor que este aparelho recebeu (✓✓ cinza para quem mandou). */
+    private fun acknowledgeDelivery(ws: WebSocket?, msgs: List<app.falai.protocol.MessageDto>, me: String) {
+        msgs.filter { it.authorId != me && it.kind == null }.groupBy { it.conversationId }.forEach { (conv, list) ->
+            val max = list.maxOf { it.seq }
+            if (max > (deliveredSent[conv] ?: 0)) {
+                deliveredSent[conv] = max
+                sendFrame(ws, app.falai.protocol.ReceiptFrame(conv, deliveredSeq = max))
+            }
+        }
+    }
+
+    /** A pessoa está com a conversa aberta na tela: avisa que leu (✓✓ azul para quem mandou). */
+    fun markRead(conversationId: String) {
+        val me = store.account()?.userId ?: return
+        if (_connection.value != ConnectionState.ONLINE) return
+        val max = store.lastSeqFromOthers(conversationId, me)
+        if (max <= 0 || max <= (readSent[conversationId] ?: 0)) return
+        if (sendFrame(socket, app.falai.protocol.ReceiptFrame(conversationId, readSeq = max))) readSent[conversationId] = max
+    }
+
+    /** Tique da mensagem (✓, ✓✓ cinza, ✓✓ azul...). */
+    fun displayStatus(m: LocalMessage): MessageStatus = store.account()?.userId?.let { store.displayStatus(m, it) } ?: m.status
+
+    // ---------- Reagir e apagar para todos ----------
+
+    /** Reage com [emoji] ("" tira a minha reação). */
+    suspend fun react(conversationId: String, messageId: String, emoji: String) {
+        val me = store.account()?.userId ?: return
+        val id = UUID.randomUUID().toString()
+        request(id, app.falai.protocol.ReactFrame(id, conversationId, messageId, emoji))
+        store.applyReaction(messageId, me, emoji)
+        bump()
+    }
+
+    /** Apaga uma mensagem minha para todos. Ainda na fila: só some daqui (nem chegou a sair). */
+    suspend fun deleteForEveryone(m: LocalMessage) {
+        if (m.seq == null) {
+            store.applyDelete(m.id)
+            store.markFailed(m.id)
+            bump()
+            return
+        }
+        val id = UUID.randomUUID().toString()
+        request(id, app.falai.protocol.DeleteMessageFrame(id, m.conversationId, m.id))
+        store.applyDelete(m.id)
+        bump()
+    }
+
+    // ---------- Grupo ----------
+
+    /**
+     * Muda o grupo: nome, foto ([photo] = JPEG novo, [removePhoto] = tirar), pôr e tirar pessoas.
+     * Todos do grupo veem um aviso ("Ana adicionou Bia").
+     */
+    suspend fun updateGroup(
+        conversationId: String,
+        title: String? = null,
+        photo: java.io.File? = null,
+        removePhoto: Boolean = false,
+        add: List<String> = emptyList(),
+        remove: List<String> = emptyList(),
+    ): ConversationDto {
+        val mediaId = when {
+            photo != null -> try {
+                withContext(Dispatchers.IO) { uploadDirect(photo, "image/jpeg") }
+            } catch (e: IOException) {
+                throw FalaiClientException("network", "Sem conexão para enviar a foto.")
+            }
+            removePhoto -> ""
+            else -> null
+        }
+        val id = UUID.randomUUID().toString()
+        val f = request(id, app.falai.protocol.UpdateGroupFrame(id, conversationId, title?.trim(), mediaId, add, remove)) as ConversationFrame
+        return f.conversation
+    }
+
+    /** Sai do grupo: a conversa fica (para ler), mas não chega mais nada. */
+    suspend fun leaveGroup(conversationId: String): ConversationDto {
+        val id = UUID.randomUUID().toString()
+        return (request(id, app.falai.protocol.LeaveGroupFrame(id, conversationId)) as ConversationFrame).conversation
     }
 
     /**
@@ -418,7 +644,7 @@ class FalaiClient(
         if (att.mediaId.isEmpty()) throw FalaiClientException("uploading", "Espere o arquivo terminar de subir.")
         val m = store.insertPendingForward(UUID.randomUUID().toString(), conversationId, acc.userId, "", att)
         bump()
-        if (_connection.value == ConnectionState.ONLINE) sendFrame(socket, SendFrame(m.id, m.conversationId, m.body, m.attachment))
+        if (_connection.value == ConnectionState.ONLINE) frameFor(m)?.let { sendFrame(socket, it) }
         return m
     }
 
@@ -446,9 +672,77 @@ class FalaiClient(
     }
 
     /** Gera um código de convite. [forUserId] preenchido = mais um aparelho para essa pessoa. */
-    suspend fun createInvite(forUserId: String? = null): InviteFrame {
+    suspend fun createInvite(forUserId: String? = null, name: String? = null): InviteFrame {
         val id = UUID.randomUUID().toString()
-        return request(id, CreateInviteFrame(id, forUserId)) as InviteFrame
+        return request(id, CreateInviteFrame(id, forUserId, name?.trim()?.takeIf { it.isNotEmpty() })) as InviteFrame
+    }
+
+    /** "Apagar conversa": some da lista em todos os meus aparelhos (para os outros nada muda). */
+    suspend fun hideConversation(conversationId: String) {
+        val id = UUID.randomUUID().toString()
+        request(id, app.falai.protocol.HideConversationFrame(id, conversationId))
+        store.deleteConversation(conversationId)
+        bump()
+    }
+
+    /** Só o administrador: traz de volta quem foi tirado da família. */
+    suspend fun restoreUser(userId: String): UserDto {
+        val id = UUID.randomUUID().toString()
+        val u = (request(id, app.falai.protocol.RestoreUserFrame(id, userId)) as UserUpdatedFrame).user
+        store.upsertUser(u)
+        bump()
+        return u
+    }
+
+    /** Só o administrador: tira a pessoa da família (os aparelhos dela são desligados). */
+    suspend fun removeUser(userId: String): UserDto {
+        val id = UUID.randomUUID().toString()
+        return (request(id, app.falai.protocol.RemoveUserFrame(id, userId)) as UserUpdatedFrame).user
+    }
+
+    // ---------- Versão nova do app ----------
+
+    private val _latestApp = MutableStateFlow<AppApkInfo?>(null)
+    /** A versão do app que está no servidor para baixar (null = nenhuma). */
+    val latestApp: StateFlow<AppApkInfo?> = _latestApp.asStateFlow()
+
+    /**
+     * Baixa o app que está no servidor para [dest] (para atualizar). [onProgress] recebe de 0 a 1.
+     * Lança [FalaiClientException] se não deu.
+     */
+    suspend fun downloadApp(dest: java.io.File, onProgress: (Float) -> Unit = {}) = withContext(Dispatchers.IO) {
+        val acc = store.account() ?: throw FalaiClientException("no_account", "Sem conta neste aparelho.")
+        val req = Request.Builder().url("${acc.serverUrl}/app/falai.apk").build()
+        val part = java.io.File(dest.path + ".part")
+        try {
+            mediaHttp.newCall(req).execute().use { r ->
+                if (!r.isSuccessful) throw FalaiClientException("download", "O servidor ainda não tem o app novo.")
+                val body = r.body ?: throw FalaiClientException("download", "O servidor ainda não tem o app novo.")
+                val total = body.contentLength()
+                var done = 0L
+                body.byteStream().use { input ->
+                    part.outputStream().use { out ->
+                        val buf = ByteArray(256 * 1024)
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            out.write(buf, 0, n)
+                            done += n
+                            if (total > 0) onProgress((done.toFloat() / total).coerceIn(0f, 1f))
+                        }
+                    }
+                }
+                if (total > 0 && done != total) throw FalaiClientException("download", "A internet caiu no meio. Tente de novo.")
+            }
+            dest.delete()
+            if (!part.renameTo(dest)) throw FalaiClientException("download", "Não consegui guardar o app novo.")
+        } catch (e: IOException) {
+            part.delete()
+            throw FalaiClientException("download", "A internet caiu no meio. Tente de novo.")
+        } catch (e: FalaiClientException) {
+            part.delete()
+            throw e
+        }
     }
 
     private val _publicBase = MutableStateFlow<String?>(null)
@@ -499,6 +793,8 @@ class FalaiClient(
             mediaId = "", kind = kind, mime = mime, name = name,
             size = file.length(), sha256 = sha256Hex(file), durationMs = durationMs,
             thumb = app.falai.protocol.sanitizeThumb(thumb),
+            // Arquivo trancado: chave nova só para ele (vai dentro da mensagem trancada).
+            key = E2e.b64(E2e.random(32)), nonce = E2e.b64(E2e.random(12)),
         )
         val m = store.insertPendingMedia(UUID.randomUUID().toString(), conversationId, acc.userId, caption.trim(), att, file.path)
         bump()
@@ -566,15 +862,33 @@ class FalaiClient(
 
     private fun upload(o: OutgoingMedia) {
         val acc = store.account() ?: return
-        val file = java.io.File(o.path)
-        if (!file.exists()) throw FalaiClientException("missing", "O arquivo não existe mais neste aparelho.")
+        val original = java.io.File(o.path)
+        if (!original.exists()) throw FalaiClientException("missing", "O arquivo não existe mais neste aparelho.")
+        // Arquivo trancado: o que sobe é a cópia trancada (o servidor não vê o conteúdo).
+        var att = o.attachment
+        val file = if (att.key != null) {
+            mediaDir.mkdirs()
+            val enc = java.io.File(mediaDir, "enviando-${o.messageId}.enc")
+            if (o.mediaId == null || !enc.exists() || att.encSha256 == null) {
+                E2e.encryptFile(original, enc, E2e.unb64(att.key!!), E2e.unb64(att.nonce!!))
+                att = att.copy(encSize = enc.length(), encSha256 = sha256Hex(enc))
+                store.updateAttachment(o.messageId, att)
+                if (o.mediaId != null) store.resetOutgoingMediaId(o.messageId)
+            }
+            enc
+        } else original
+        val o = if (att !== o.attachment) o.copy(attachment = att, mediaId = null) else o
         val json = "application/json".toMediaType()
         val parseStatus = { t: String -> FalaiJson.decodeFromString(app.falai.protocol.MediaStatus.serializer(), t) }
 
         var status = if (o.mediaId == null) {
             val body = FalaiJson.encodeToString(
                 app.falai.protocol.MediaCreateRequest.serializer(),
-                app.falai.protocol.MediaCreateRequest(o.attachment.size, o.attachment.sha256, o.attachment.mime, o.attachment.name),
+                if (o.attachment.key != null) {
+                    app.falai.protocol.MediaCreateRequest(o.attachment.encSize!!, o.attachment.encSha256!!, "application/octet-stream", "falai.enc")
+                } else {
+                    app.falai.protocol.MediaCreateRequest(o.attachment.size, o.attachment.sha256, o.attachment.mime, o.attachment.name)
+                },
             )
             call(authed(Request.Builder().url("${acc.serverUrl}/api/media").post(body.toRequestBody(json)), acc).build(), parseStatus)
                 .also { store.setOutgoingMediaId(o.messageId, it.mediaId) }
@@ -608,12 +922,13 @@ class FalaiClient(
         }
 
         store.markUploaded(o.messageId, status.mediaId)
+        if (file !== original) file.delete()
         _uploadProgress.value = _uploadProgress.value - o.messageId
         if (_lastError.value?.contains("arquivo", ignoreCase = true) == true) _lastError.value = null
         bump()
         val m = store.messageById(o.messageId)
         if (m != null && _connection.value == ConnectionState.ONLINE) {
-            sendFrame(socket, SendFrame(m.id, m.conversationId, m.body, m.attachment))
+            frameFor(m)?.let { sendFrame(socket, it) }
         }
     }
 
@@ -645,11 +960,33 @@ class FalaiClient(
                 r.body!!.byteStream().use { input -> tmp.outputStream().use { input.copyTo(it, 256 * 1024) } }
                 att.sha256.ifEmpty { r.header("X-Content-SHA256").orEmpty() }
             }
-            if (expected.isEmpty() || sha256Hex(tmp) != expected) {
-                tmp.delete()
-                throw FalaiClientException("hash_mismatch", "O arquivo chegou corrompido. Tente de novo.")
+            if (att.key != null) {
+                // Arquivo trancado: confere a cópia trancada, destranca e confere o original.
+                if (sha256Hex(tmp) != att.encSha256) {
+                    tmp.delete()
+                    throw FalaiClientException("hash_mismatch", "O arquivo chegou corrompido. Tente de novo.")
+                }
+                val plain = java.io.File(mediaDir, att.mediaId + ".abrindo")
+                try {
+                    E2e.decryptFile(tmp, plain, E2e.unb64(att.key!!), E2e.unb64(att.nonce!!))
+                } catch (e: Exception) {
+                    plain.delete()
+                    throw FalaiClientException("hash_mismatch", "Não deu para abrir o arquivo trancado.")
+                } finally {
+                    tmp.delete()
+                }
+                if (sha256Hex(plain) != att.sha256) {
+                    plain.delete()
+                    throw FalaiClientException("hash_mismatch", "O arquivo chegou corrompido. Tente de novo.")
+                }
+                if (!plain.renameTo(target)) throw FalaiClientException("io", "Não consegui salvar o arquivo.")
+            } else {
+                if (expected.isEmpty() || sha256Hex(tmp) != expected) {
+                    tmp.delete()
+                    throw FalaiClientException("hash_mismatch", "O arquivo chegou corrompido. Tente de novo.")
+                }
+                if (!tmp.renameTo(target)) throw FalaiClientException("io", "Não consegui salvar o arquivo.")
             }
-            if (!tmp.renameTo(target)) throw FalaiClientException("io", "Não consegui salvar o arquivo.")
             store.setLocalMedia(att.mediaId, target.path)
             bump()
             target

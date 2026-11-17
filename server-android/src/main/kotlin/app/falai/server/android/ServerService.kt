@@ -108,7 +108,7 @@ class ServerService : Service() {
         return Notification.Builder(this, CHANNEL)
             .setContentTitle("Falaí Servidor")
             .setContentText(text)
-            .setSmallIcon(android.R.drawable.stat_sys_upload_done)
+            .setSmallIcon(R.drawable.ic_stat_falai)
             .setContentIntent(open)
             .setOngoing(true)
             .build()

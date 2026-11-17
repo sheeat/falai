@@ -234,27 +234,6 @@ class AudioRecorder(private val context: Context) {
     }
 }
 
-/**
- * Prepara a foto de perfil: corta um quadrado do meio da foto escolhida, reduz para 512×512
- * e salva em JPEG (fica pequena, uns 50 KB). Devolve null se não deu para abrir a foto.
- */
-fun makeProfilePhoto(context: Context, uri: Uri): File? {
-    val copied = copyFromUri(context, uri) ?: return null
-    try {
-        val bmp = loadThumbnail(copied.file, 1024) ?: return null
-        val side = minOf(bmp.width, bmp.height)
-        val square = Bitmap.createBitmap(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side)
-        val small = if (side > 512) Bitmap.createScaledBitmap(square, 512, 512, true) else square
-        val out = newOutgoingFile(context, "jpg")
-        out.outputStream().use { small.compress(Bitmap.CompressFormat.JPEG, 85, it) }
-        return out
-    } catch (e: Exception) {
-        return null
-    } finally {
-        copied.file.delete()
-    }
-}
-
 /** No Android 9 salvar fora do app precisa de permissão; do 10 em diante, não. */
 fun needsStoragePermission(): Boolean = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
 

@@ -73,7 +73,7 @@ class FailureLimiter(private val max: Int, private val windowMs: Long, private v
  * um aparelho lento não trave a entrega para os outros.
  */
 class Hub {
-    class Conn(val device: AuthedDevice) {
+    class Conn(val device: AuthedDevice, val protocol: Int = 1) {
         val outbox = Channel<ServerFrame>(capacity = 1000)
         /** Nome atual da pessoa (muda se ela trocar o nome com o aparelho conectado). */
         @Volatile var name: String = device.user.name
@@ -117,6 +117,11 @@ class Hub {
         }
     }
 
+    /** A pessoa saiu da família: derruba as conexões abertas dela. */
+    fun disconnectUser(userId: String) {
+        byUser.remove(userId)?.forEach { it.outbox.close() }
+    }
+
     fun isConnected(deviceId: String): Boolean = byUser.values.any { set -> set.any { it.device.deviceId == deviceId } }
 
     fun onlineDevices(userId: String): Int = byUser[userId]?.size ?: 0
@@ -152,6 +157,7 @@ class FalaiServer(
     private val limiter = FailureLimiter(config.pairMaxFailures, config.pairWindowMs, clock)
     private val mediaFiles = MediaFiles(config.mediaDir, store, this.log)
     private val invites = InviteSupport(store, config.mediaDir, this.log)
+        .also { it.onApkPublished = { info -> hub.deliverAll(AppUpdateFrame(info)) } }
     /** Falaí no computador: QR Codes esperando o celular, e um limite de pedidos por endereço. */
     val webLinks = WebLinks(clock)
     private val webLimiter = FailureLimiter(30, 10 * 60_000L, clock)
@@ -251,6 +257,30 @@ class FalaiServer(
                 )
             }
 
+            // App reinstalado num aparelho conhecido: volta sem convite.
+            post("/api/reconnect") {
+                val key = clientKey(call)
+                fun err(code: String, msg: String) = FalaiJson.encodeToString(ErrorResponse.serializer(), ErrorResponse(code, msg))
+                if (limiter.isBlocked(key)) {
+                    call.respondText(err("rate_limited", "Muitas tentativas. Espere alguns minutos."), ContentType.Application.Json, HttpStatusCode.TooManyRequests)
+                    return@post
+                }
+                val req = try {
+                    FalaiJson.decodeFromString(ReconnectRequest.serializer(), call.receiveText())
+                } catch (e: Exception) {
+                    call.respondText(err("invalid", "Pedido mal formado."), ContentType.Application.Json, HttpStatusCode.BadRequest)
+                    return@post
+                }
+                val resp = store.reconnect(req)
+                if (resp == null) {
+                    limiter.recordFailure(key)
+                    call.respondText(err("unknown_device", "Aparelho desconhecido. Use um convite."), ContentType.Application.Json, HttpStatusCode.NotFound)
+                } else {
+                    log("Aparelho voltou: ${resp.userName} (${resp.deviceId.take(8)})")
+                    call.respondText(FalaiJson.encodeToString(PairResponse.serializer(), resp), ContentType.Application.Json)
+                }
+            }
+
             mediaRoutes(store, mediaFiles, log)
             inviteRoutes(store, invites, limiter, ::clientKey)
             webRoutes(store, webLinks, webLimiter, ::clientKey, log)
@@ -266,14 +296,18 @@ class FalaiServer(
             close(CloseReason(4001, "unauthorized"))
             return
         }
-        val conn = Hub.Conn(device)
+        val clientProtocol = call.request.queryParameters[CLIENT_PROTOCOL_PARAM]?.toIntOrNull() ?: 1
+        val conn = Hub.Conn(device, clientProtocol)
         hub.add(conn)
         log("Conectado: ${device.user.name} (${device.deviceId.take(8)})")
 
         // Escritor: tudo que vai para este aparelho passa pela fila, em ordem.
         val writer = launch {
             try {
-                for (f in conn.outbox) send(Frame.Text(json(f)))
+                for (f in conn.outbox) {
+                    val out = forProtocol(f, conn.protocol) ?: continue
+                    send(Frame.Text(json(out)))
+                }
             } catch (_: ClosedSendChannelException) {
             } finally {
                 // Fila fechada (aparelho travado ou desconectado): encerra a conexão.
@@ -289,12 +323,13 @@ class FalaiServer(
             reply(
                 HelloFrame(
                     protocol = PROTOCOL_VERSION,
-                    user = device.user,
+                    user = store.userById(device.user.id) ?: device.user,
                     deviceId = device.deviceId,
                     conversations = store.conversationsOf(device.user.id),
                     lastSeq = store.lastSeqFor(device.user.id),
                     publicBase = invites.publicBase(),
                     turnConfigured = if (device.user.isAdmin) iceServers.turnConfigured() else null,
+                    app = invites.apkInfo(),
                 )
             )
             calls.onConnected(conn)
@@ -333,6 +368,15 @@ class FalaiServer(
         is CreateConversationFrame -> f.requestId
         is ListUsersFrame -> f.requestId
         is CreateInviteFrame -> f.requestId
+        is HideConversationFrame -> f.requestId
+        is RemoveUserFrame -> f.requestId
+        is RestoreUserFrame -> f.requestId
+        is ReactFrame -> f.id
+        is DeleteMessageFrame -> f.id
+        is UpdateGroupFrame -> f.requestId
+        is LeaveGroupFrame -> f.requestId
+        is ReceiptFrame -> null
+        is DeviceKeyFrame -> null
         is PingFrame -> f.requestId
         is SetPublicAddressFrame -> f.requestId
         is ApproveWebFrame -> f.requestId
@@ -343,6 +387,35 @@ class FalaiServer(
         is SetTurnFrame -> f.requestId
         is CallLeaveFrame, is CallDeclineFrame, is CallMediaFrame, is CallSignalFrame -> null
         is SyncFrame -> null
+    }
+
+    /**
+     * Aparelho com app antigo: não entende reações nem "apagado para todos" (mostraria como
+     * mensagem solta), então essas ficam de fora; a mensagem apagada chega com um aviso no texto.
+     */
+    private fun forProtocol(f: ServerFrame, protocol: Int): ServerFrame? {
+        if (protocol >= PROTOCOL_VERSION) return f
+        fun old(m: MessageDto): MessageDto? = when {
+            protocol < 2 && (m.kind == MessageKinds.REACTION || m.kind == MessageKinds.DELETE) -> null
+            protocol < 2 && m.deleted -> m.copy(body = "🚫 Mensagem apagada")
+            // App de antes da 0.11 não sabe abrir mensagem trancada: mostra um aviso para atualizar.
+            m.sealed != null -> m.copy(sealed = null, body = SEALED_OLD_APP_TEXT, attachment = null)
+            else -> m
+        }
+        return when (f) {
+            is MessageFrame -> old(f.message)?.let { MessageFrame(it) }
+            is SyncBatchFrame -> SyncBatchFrame(f.messages.mapNotNull(::old))
+            is ReceiptsFrame -> if (protocol < 2) null else f
+            else -> f
+        }
+    }
+
+    /** Mudou o grupo: cada um recebe a conversa como vê, e depois os avisos (todos os aparelhos, inclusive o que mexeu). */
+    private fun publishGroupChange(ch: Store.GroupChange, exceptDeviceId: String?) {
+        for (uid in ch.notify) {
+            store.conversationFor(ch.conversation.id, uid)?.let { hub.deliver(listOf(uid), ConversationFrame(null, it), exceptDeviceId) }
+        }
+        for (n in ch.notices) hub.deliver(ch.notify, MessageFrame(n))
     }
 
     private fun handleFrame(conn: Hub.Conn, f: ClientFrame, reply: (ServerFrame) -> Unit) {
@@ -403,8 +476,49 @@ class FalaiServer(
                 val m = stored.message
                 reply(AckFrame(m.id, m.seq, m.createdAt))
                 if (stored.isNew) {
+                    // Quem tinha apagado esta conversa volta a vê-la (só com as mensagens novas).
+                    for (uid in store.unhideForNewMessage(m.conversationId)) {
+                        store.conversationFor(m.conversationId, uid)?.let { hub.deliver(listOf(uid), ConversationFrame(null, it)) }
+                    }
                     hub.deliver(store.memberIds(m.conversationId), MessageFrame(m), exceptDeviceId = device.deviceId)
                 }
+            }
+
+            is ReactFrame -> {
+                val stored = store.react(device, f)
+                val m = stored.message
+                reply(AckFrame(m.id, m.seq, m.createdAt))
+                if (stored.isNew) hub.deliver(store.memberIds(m.conversationId), MessageFrame(m), exceptDeviceId = device.deviceId)
+            }
+
+            is DeleteMessageFrame -> {
+                val stored = store.deleteForEveryone(device, f)
+                val m = stored.message
+                reply(AckFrame(m.id, m.seq, m.createdAt))
+                if (stored.isNew) hub.deliver(store.memberIds(m.conversationId), MessageFrame(m), exceptDeviceId = device.deviceId)
+            }
+
+            is UpdateGroupFrame -> {
+                val ch = store.updateGroup(device, f)
+                reply(ConversationFrame(f.requestId, store.conversationFor(ch.conversation.id, device.user.id)!!))
+                publishGroupChange(ch, exceptDeviceId = device.deviceId)
+            }
+
+            is LeaveGroupFrame -> {
+                val ch = store.leaveGroup(device, f.conversationId)
+                reply(ConversationFrame(f.requestId, store.conversationFor(ch.conversation.id, device.user.id)!!))
+                publishGroupChange(ch, exceptDeviceId = device.deviceId)
+            }
+
+            is DeviceKeyFrame -> {
+                if (store.setDeviceKey(device.deviceId, f.publicKey)) {
+                    store.userById(device.user.id)?.let { hub.deliverAll(UserUpdatedFrame(null, it)) }
+                }
+            }
+
+            is ReceiptFrame -> {
+                val r = store.updateReceipt(device.user.id, f.conversationId, f.deliveredSeq, f.readSeq)
+                if (r != null) hub.deliver(store.memberIds(f.conversationId), ReceiptsFrame(f.conversationId, r), exceptDeviceId = device.deviceId)
             }
 
             is SyncFrame -> {
@@ -423,13 +537,35 @@ class FalaiServer(
                 val c = store.createConversation(device.user, f.kind, f.title, f.memberIds)
                 reply(ConversationFrame(f.requestId, c))
                 // Os outros participantes (e meus outros aparelhos) ficam sabendo da conversa nova.
-                hub.deliver(c.memberIds, ConversationFrame(null, c), exceptDeviceId = device.deviceId)
+                hub.deliver(listOf(device.user.id), ConversationFrame(null, c), exceptDeviceId = device.deviceId)
+                hub.deliver(c.memberIds - device.user.id, ConversationFrame(null, c.copy(clearedSeq = null)))
+            }
+
+            is HideConversationFrame -> {
+                val cleared = store.hideConversation(device.user.id, f.conversationId)
+                reply(ConversationHiddenFrame(f.requestId, f.conversationId, cleared))
+                hub.deliver(listOf(device.user.id), ConversationHiddenFrame(null, f.conversationId, cleared), exceptDeviceId = device.deviceId)
+            }
+
+            is RestoreUserFrame -> {
+                val u = store.restoreUser(device.user, f.userId)
+                log("${conn.name} trouxe ${u.name} de volta para a família")
+                reply(UserUpdatedFrame(f.requestId, u))
+                hub.deliverAll(UserUpdatedFrame(null, u), exceptDeviceId = device.deviceId)
+            }
+
+            is RemoveUserFrame -> {
+                val u = store.removeUser(device.user, f.userId)
+                log("${conn.name} tirou ${u.name} da família")
+                hub.disconnectUser(u.id)
+                reply(UserUpdatedFrame(f.requestId, u))
+                hub.deliverAll(UserUpdatedFrame(null, u), exceptDeviceId = device.deviceId)
             }
 
             is ListUsersFrame -> reply(UsersFrame(f.requestId, store.listUsers()))
 
             is CreateInviteFrame -> {
-                val (code, expires) = store.createInvite(device.user, f.forUserId)
+                val (code, expires) = store.createInvite(device.user, f.forUserId, suggestedName = f.name)
                 log("Convite criado por ${conn.name}")
                 reply(InviteFrame(f.requestId, code, expires, invites.linkFor(code)))
             }

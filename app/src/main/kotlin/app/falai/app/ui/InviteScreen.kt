@@ -55,6 +55,7 @@ fun InviteScreen(client: FalaiClient, onBack: () -> Unit) {
     var apkStatus by remember { mutableStateOf<String?>(null) }
     val publicBase by client.publicBase.collectAsState()
     var address by remember { mutableStateOf("") }
+    var guestName by remember { mutableStateOf("") }
     var savingAddress by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
@@ -71,21 +72,23 @@ fun InviteScreen(client: FalaiClient, onBack: () -> Unit) {
         else "O app não ficou disponível para download. Se precisar, mande o arquivo do app junto com o link."
     }
 
+    var invitedName by remember { mutableStateOf<String?>(null) }
     fun generate(forOwnDevice: Boolean) {
         error = null
         scope.launch {
             try {
-                invite = client.createInvite(if (forOwnDevice) me.userId else null)
+                invite = client.createInvite(if (forOwnDevice) me.userId else null, if (forOwnDevice) null else guestName)
                 forMe = forOwnDevice
+                invitedName = if (forOwnDevice) null else guestName.trim().ifEmpty { null }
             } catch (e: Exception) {
                 error = e.message ?: "Não deu para gerar o convite."
             }
         }
     }
 
-    Column(Modifier.fillMaxSize().background(Color.White)) {
+    Column(Modifier.fillMaxSize().background(FalaiColors.Surface)) {
         Row(
-            Modifier.fillMaxWidth().background(FalaiColors.Primary).statusBarsPadding()
+            Modifier.fillMaxWidth().background(FalaiColors.Header).statusBarsPadding()
                 .padding(horizontal = 4.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -97,8 +100,16 @@ fun InviteScreen(client: FalaiClient, onBack: () -> Unit) {
             Modifier.verticalScroll(rememberScrollState()).padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+            OutlinedTextField(
+                value = guestName, onValueChange = { if (it.length <= 60) guestName = it },
+                label = { Text("Nome da pessoa (opcional)") },
+                supportingText = { Text("Já aparece preenchido para ela. Ela pode mudar.") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.Words),
+                modifier = Modifier.fillMaxWidth(),
+            )
             Button(onClick = { generate(false) }, modifier = Modifier.fillMaxWidth().height(50.dp)) {
-                Text("Convidar uma pessoa nova")
+                Text(if (guestName.isBlank()) "Convidar uma pessoa nova" else "Convidar ${guestName.trim()}")
             }
             OutlinedButton(onClick = { generate(true) }, modifier = Modifier.fillMaxWidth().height(50.dp)) {
                 Text("Ligar mais um aparelho meu")
@@ -114,7 +125,7 @@ fun InviteScreen(client: FalaiClient, onBack: () -> Unit) {
                 val message = if (forMe) {
                     "Link para ligar mais um aparelho meu ao Falaí: $link"
                 } else {
-                    "Oi! Te convidei para o Falaí, o mensageiro da nossa família 💬\nToque no link para entrar: $link"
+                    "Oi${invitedName?.let { ", $it" } ?: ""}! Te convidei para o Falaí, o mensageiro da nossa família 💬\nToque no link para baixar o app e entrar: $link"
                 }
                 Column(
                     Modifier.fillMaxWidth().background(FalaiColors.ChatBg).padding(20.dp),

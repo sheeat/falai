@@ -18,6 +18,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
@@ -184,7 +185,7 @@ class FalaiClientTest {
     }
 
     @Test
-    fun `aparelho novo da mesma pessoa recebe o historico e as conversas`() = runBlocking {
+    fun `aparelho novo da mesma pessoa recebe as conversas e as mensagens novas`() = runBlocking {
         val (chefe, ana, conv) = family()
         repeat(3) { ana.send(conv, "a$it") }
         chefe.send(conv, "c0")
@@ -197,9 +198,14 @@ class FalaiClientTest {
         assertTrue(acc.isAdmin)
         online(tablet)
 
-        eventually("tablet com histórico") { bodies(tablet, conv).toSet() == setOf("a0", "a1", "a2", "c0") }
+        // Mensagens trancadas antes do tablet existir: ele não tem a chave (é o combinado).
+        eventually("tablet com as antigas trancadas") { bodies(tablet, conv) == List(4) { ClientStore.LOCKED_LABEL } }
+        // Depois que o tablet mostrou o cadeado, as novas abrem nele.
+        eventually("Ana conhecer o tablet") { ana.store.user(acc.userId)?.devices?.any { it.deviceId == acc.deviceId } == true }
+        chefe.send(conv, "c1")
+        eventually("tablet abrir a nova") { bodies(tablet, conv).last() == "c1" }
         // Mensagem do Chefe aparece no tablet como "enviada por mim".
-        assertEquals(MessageStatus.SENT, tablet.store.messages(conv).single { it.body == "c0" }.status)
+        assertEquals(MessageStatus.SENT, tablet.store.messages(conv).single { it.body == "c1" }.status)
         eventually("tablet com o nome da Ana") {
             tablet.store.conversationSummaries(acc.userId).single().displayName == "Ana"
         }
@@ -316,17 +322,21 @@ class FalaiClientTest {
     }
 
     @Test
-    fun `tablet novo ve o anexo antigo e consegue baixar`() = runBlocking {
+    fun `tablet novo nao abre o anexo antigo mas abre e baixa o novo`() = runBlocking {
         val (chefe, ana, conv) = family()
         val doc = randomFile("lista-churrasco.pdf", 150_000, 4)
         ana.sendMedia(conv, doc, "file", "application/pdf")
         eventually("enviado") { ana.store.messages(conv).single().status == MessageStatus.SENT }
 
         val tablet = newClient("tablet")
-        tablet.pair(url, chefe.createInvite(chefe.account.value!!.userId).code, "Tablet", null)
+        val tacc = tablet.pair(url, chefe.createInvite(chefe.account.value!!.userId).code, "Tablet", null)
         online(tablet)
-        eventually("tablet ver o anexo") { tablet.store.messages(conv).singleOrNull()?.attachment != null }
-        val att = tablet.store.messages(conv).single().attachment!!
+        eventually("tablet ver a antiga trancada") { tablet.store.messages(conv).singleOrNull()?.body == ClientStore.LOCKED_LABEL }
+        assertEquals(null, tablet.store.messages(conv).single().attachment)
+        eventually("Ana conhecer o tablet") { ana.store.user(tacc.userId)?.devices?.any { it.deviceId == tacc.deviceId } == true }
+        ana.sendMedia(conv, doc, "file", "application/pdf")
+        eventually("tablet ver o anexo novo") { tablet.store.messages(conv).lastOrNull()?.attachment != null }
+        val att = tablet.store.messages(conv).last().attachment!!
         assertEquals("lista-churrasco.pdf", att.name)
         kotlin.test.assertContentEquals(doc.readBytes(), tablet.mediaFile(att).readBytes())
         assertEquals("📄 lista-churrasco.pdf", ClientStore.preview("", att))
@@ -669,5 +679,319 @@ class FalaiClientTest {
             chefeEvents.any { it is app.falai.protocol.CallStateFrame && it.call.ended }
         }
         j1.cancel(); j2.cancel()
+    }
+
+    // ---------- 0.9 ----------
+
+    @Test
+    fun `app reinstalado entra sozinho na mesma conta`() = runBlocking<Unit> {
+        val chefe = newClient("chefe")
+        chefe.pair(url, adminCode, "Celular do Chefe", "Chefe")
+        online(chefe)
+        val ana = newClient("ana")
+        val key = "android-id-da-ana-1234567890"
+        ana.pair(url, chefe.createInvite(name = "Ana").code, "Celular da Ana", "Ana", installKey = key)
+        online(ana)
+        val conv = chefe.createConversation("direct", null, listOf(ana.account.value!!.userId))
+        chefe.send(conv.id, "oi Ana")
+        eventually("Ana receber") { bodies(ana, conv.id) == listOf("oi Ana") }
+        ana.stop()
+
+        // "Desinstalou e instalou de novo": banco novo, sem conta.
+        val ana2 = newClient("ana-reinstalada")
+        assertEquals(null, ana2.reconnect(url, "aparelho-desconhecido-000000", "Outro"))
+        assertEquals(null, ana2.account.value)
+        assertEquals("Ana", ana2.reconnect(url, key, "Celular da Ana"))
+        assertEquals(ana.account.value!!.userId, ana2.account.value!!.userId)
+        online(ana2)
+        // As conversas voltam; as mensagens antigas ficam trancadas (a chave nova é outra).
+        eventually("conversa voltar") { bodies(ana2, conv.id) == listOf(ClientStore.LOCKED_LABEL) }
+        // As novas abrem normalmente.
+        eventually("Chefe ver o cadeado novo") {
+            chefe.store.user(ana2.account.value!!.userId)?.devices?.any { it.publicKey == ana2.store.myKeys().publicB64 } == true
+        }
+        chefe.send(conv.id, "de novo, oi")
+        eventually("nova abrir") { bodies(ana2, conv.id).last() == "de novo, oi" }
+    }
+
+    @Test
+    fun `apagar conversa some nos meus aparelhos e volta com mensagem nova`() = runBlocking<Unit> {
+        val (chefe, ana, conv) = family()
+        chefe.send(conv, "primeira")
+        eventually("Ana receber") { bodies(ana, conv) == listOf("primeira") }
+        // Segundo aparelho da Ana, desligado na hora em que ela apaga.
+        val anaTablet = newClient("ana-tablet")
+        anaTablet.pair(url, chefe.createInvite(ana.account.value!!.userId).code, "Tablet", null)
+        online(anaTablet)
+        eventually("tablet sincronizar") { bodies(anaTablet, conv) == listOf(ClientStore.LOCKED_LABEL) }
+        eventually("Chefe conhecer o tablet") { chefe.store.user(ana.account.value!!.userId)?.devices?.size == 2 }
+        anaTablet.stop()
+
+        ana.hideConversation(conv)
+        val me = ana.account.value!!.userId
+        assertTrue(ana.store.conversationSummaries(me).none { it.id == conv })
+        assertTrue(ana.store.messages(conv).isEmpty())
+        // O Chefe continua vendo tudo.
+        assertEquals(listOf("primeira"), bodies(chefe, conv))
+
+        // O tablet volta a conectar: a conversa some lá também.
+        anaTablet.start()
+        eventually("sumir no tablet") { anaTablet.store.conversationSummaries(me).none { it.id == conv } }
+
+        // Mensagem nova: volta, só com a nova.
+        chefe.send(conv, "segunda")
+        eventually("voltar na Ana") { bodies(ana, conv) == listOf("segunda") }
+        assertTrue(ana.store.conversationSummaries(me).any { it.id == conv })
+        eventually("voltar no tablet") { bodies(anaTablet, conv) == listOf("segunda") }
+    }
+
+    @Test
+    fun `administrador tira alguem da familia`() = runBlocking<Unit> {
+        val (chefe, ana, _) = family()
+        val anaId = ana.account.value!!.userId
+        val u = chefe.removeUser(anaId)
+        assertTrue(u.removed)
+        eventually("Ana ser desligada") { ana.connection.value == ConnectionState.UNAUTHORIZED }
+        eventually("Chefe saber") { chefe.store.user(anaId)?.removed == true }
+        assertTrue(chefe.store.activeUsers().none { it.id == anaId })
+        assertEquals("Ana", chefe.store.user(anaId)!!.name)
+        // A Ana não consegue tirar ninguém (nem está mais conectada); o Chefe não pode se tirar.
+        val e = assertFailsWith<FalaiClientException> { chefe.removeUser(chefe.account.value!!.userId) }
+        assertEquals("invalid", e.code)
+    }
+
+    @Test
+    fun `administrador traz de volta quem saiu e o aparelho volta sozinho`() = runBlocking<Unit> {
+        val (chefe, ana, conv) = family()
+        val anaId = ana.account.value!!.userId
+        chefe.send(conv, "antes")
+        eventually("Ana receber") { bodies(ana, conv) == listOf("antes") }
+        chefe.removeUser(anaId)
+        eventually("Ana ser desligada") { ana.connection.value == ConnectionState.UNAUTHORIZED }
+
+        val u = chefe.restoreUser(anaId)
+        assertEquals(false, u.removed)
+        assertTrue(chefe.store.activeUsers().any { it.id == anaId })
+        // A Ana abre o app de novo: conecta com a mesma conta, sem convite, e recebe o que perdeu.
+        chefe.send(conv, "voltou!")
+        ana.reconnectNow()
+        online(ana)
+        eventually("Ana receber depois de voltar") { bodies(ana, conv) == listOf("antes", "voltou!") }
+    }
+
+    @Test
+    fun `versao nova do app chega nos celulares e da para baixar`() = runBlocking<Unit> {
+        val (chefe, ana, _) = family()
+        assertEquals(null, ana.latestApp.value)
+        val apk = File(dir, "novo.apk").apply { writeBytes(byteArrayOf(0x50, 0x4B) + ByteArray(300_000) { (it % 251).toByte() }) }
+        chefe.publishAppIfNewer(apk, 21, "0.9.3")
+        // Quem está conectado fica sabendo na hora.
+        eventually("Ana saber da versão nova") { ana.latestApp.value?.versionCode == 21L }
+        assertEquals("0.9.3", ana.latestApp.value!!.versionName)
+        // Baixa o arquivo inteiro, com o andamento.
+        val dest = File(dir, "baixado.apk")
+        var last = 0f
+        ana.downloadApp(dest) { last = it }
+        assertTrue(apk.readBytes().contentEquals(dest.readBytes()))
+        assertEquals(1f, last)
+        // Quem conecta depois recebe na chegada (hello).
+        ana.stop(); ana.start()
+        online(ana)
+        assertEquals(21L, ana.latestApp.value?.versionCode)
+    }
+
+    // ---------- 0.10 ----------
+
+    @Test
+    fun `responder, reagir, apagar para todos e tiques`() = runBlocking<Unit> {
+        val (chefe, ana, conv) = family()
+        val anaId = ana.account.value!!.userId
+        val chefeId = chefe.account.value!!.userId
+        val m1 = chefe.send(conv, "Bom dia!")
+        eventually("Ana receber") { bodies(ana, conv) == listOf("Bom dia!") }
+        // A Ana recebeu: ✓✓ cinza para o Chefe. Abriu a conversa: ✓✓ azul.
+        eventually("✓✓ entregue") { chefe.displayStatus(chefe.store.messageById(m1.id)!!) == MessageStatus.DELIVERED }
+        ana.markRead(conv)
+        eventually("✓✓ lida") { chefe.displayStatus(chefe.store.messageById(m1.id)!!) == MessageStatus.READ }
+
+        val r = ana.send(conv, "Bom dia, pai", replyToId = m1.id)
+        eventually("resposta chegar") { chefe.store.messageById(r.id)?.replyToId == m1.id }
+
+        ana.react(conv, m1.id, "❤️")
+        assertEquals(mapOf(anaId to "❤️"), ana.store.messageById(m1.id)!!.reactions)
+        eventually("reação chegar") { chefe.store.messageById(m1.id)?.reactions == mapOf(anaId to "❤️") }
+        ana.react(conv, m1.id, "")
+        eventually("reação sair") { chefe.store.messageById(m1.id)?.reactions?.isEmpty() == true }
+
+        // Só quem escreveu apaga para todos.
+        val e = assertFailsWith<FalaiClientException> { ana.deleteForEveryone(ana.store.messageById(m1.id)!!) }
+        assertEquals("forbidden", e.code)
+        chefe.deleteForEveryone(chefe.store.messageById(m1.id)!!)
+        assertTrue(chefe.store.messageById(m1.id)!!.deleted)
+        eventually("apagar na Ana") { ana.store.messageById(m1.id)?.deleted == true }
+        assertEquals("", ana.store.messageById(m1.id)!!.body)
+        assertEquals(ClientStore.DELETED_LABEL, ana.store.conversationSummaries(anaId).first { it.id == conv }.let {
+            // a última é a resposta da Ana; a apagada aparece no lugar certo da conversa
+            ana.store.messages(conv).first().let { m -> if (m.deleted) ClientStore.DELETED_LABEL else m.body }
+        })
+
+        // Aparelho novo da Ana: recebe tudo já com o estado certo (apagada, sem reação extra).
+        val tablet = newClient("ana-tablet-10")
+        tablet.pair(url, chefe.createInvite(anaId).code, "Tablet", null)
+        online(tablet)
+        eventually("tablet sincronizar") { tablet.store.messages(conv).size == 2 }
+        assertTrue(tablet.store.messageById(m1.id)!!.deleted)
+        assertEquals(m1.id, tablet.store.messageById(r.id)!!.replyToId)
+        assertEquals(chefeId, chefe.account.value!!.userId)
+    }
+
+    @Test
+    fun `grupo - por, tirar, nome e sair`() = runBlocking<Unit> {
+        val (chefe, ana, _) = family()
+        val anaId = ana.account.value!!.userId
+        val chefeId = chefe.account.value!!.userId
+        val bia = newClient("bia")
+        bia.pair(url, chefe.createInvite().code, "Celular da Bia", "Bia")
+        online(bia)
+        val biaId = bia.account.value!!.userId
+        val g = ana.createConversation("group", "Primos", listOf(chefeId))
+        eventually("Chefe ver o grupo") { chefe.store.conversationSummaries(chefeId).any { it.id == g.id } }
+
+        chefe.updateGroup(g.id, title = "Primos ❤️", add = listOf(biaId))
+        eventually("Bia entrar") { bia.store.conversationSummaries(biaId).any { it.id == g.id && it.displayName == "Primos ❤️" } }
+        eventually("aviso no grupo") { ana.store.messages(g.id).any { it.isSystem && it.body == "Chefe adicionou Bia" } }
+
+        // A Ana (quem criou) tira a Bia: o grupo continua na lista dela, mas sem poder escrever.
+        ana.updateGroup(g.id, remove = listOf(biaId))
+        eventually("Bia saber") { bia.store.conversationSummaries(biaId).first { it.id == g.id }.iAmMember == false }
+        eventually("aviso para a Bia") { bia.store.messages(g.id).any { it.body == "Ana tirou Bia do grupo" } }
+
+        chefe.leaveGroup(g.id)
+        eventually("Ana ver que o Chefe saiu") { ana.store.conversationSummaries(anaId).first { it.id == g.id }.memberIds == listOf(anaId) }
+        assertFalse(chefe.store.conversationSummaries(chefeId).first { it.id == g.id }.iAmMember)
+    }
+
+    // ---------- 0.11: conversas trancadas ----------
+
+    @Test
+    fun `o servidor so guarda mensagens e arquivos trancados`() = runBlocking<Unit> {
+        val (chefe, ana, conv) = family()
+        eventually("Chefe conhecer o cadeado da Ana") { chefe.store.deviceKeysFor(conv).size == 2 }
+        chefe.send(conv, "segredo da família 123")
+        val doc = randomFile("receita-da-vo.pdf", 2 * 1024 * 1024 + 5, 9)
+        chefe.sendMedia(conv, doc, "file", "application/pdf", caption = "legenda secreta")
+        eventually("Ana receber os dois") { ana.store.messages(conv).size == 2 && ana.store.messages(conv).last().attachment != null }
+        assertEquals("segredo da família 123", ana.store.messages(conv).first().body)
+        val att = ana.store.messages(conv).last().attachment!!
+        assertEquals("receita-da-vo.pdf", att.name)
+        assertEquals("legenda secreta", ana.store.messages(conv).last().body)
+        kotlin.test.assertContentEquals(doc.readBytes(), ana.mediaFile(att).readBytes())
+
+        // No banco do servidor: nada do texto, nem o nome do arquivo.
+        val db = JdbcDb(File(dir, "server.db").path)
+        val rows = db.query("SELECT body, attachment_json, sealed_json FROM messages WHERE conversation_id = ?", conv)
+        assertEquals(2, rows.size)
+        for (r in rows) {
+            assertEquals("", r.string("body"))
+            assertTrue(r.stringOrNull("sealed_json")!!.isNotEmpty())
+            assertFalse(r.stringOrNull("sealed_json")!!.contains("segredo"))
+            assertFalse((r.stringOrNull("attachment_json") ?: "").contains("receita"))
+        }
+        val media = db.query("SELECT name, mime, size FROM media").single()
+        assertEquals("falai.enc", media.string("name"))
+        assertEquals(E2e.encryptedSize(doc.length()), media.long("size"))
+        // E o arquivo guardado no servidor não é o original.
+        val stored = File(dir, "server-media").walkTopDown().filter { it.isFile && it.length() == media.long("size") }.single()
+        assertFalse(stored.readBytes().copyOfRange(0, 1000).contentEquals(doc.readBytes().copyOfRange(0, 1000)))
+    }
+
+    @Test
+    fun `aparelho novo enquanto eu estava sem internet - tranca de novo e chega`() = runBlocking<Unit> {
+        val (chefe, ana, conv) = family()
+        eventually("Chefe conhecer a Ana") { chefe.store.deviceKeysFor(conv).size == 2 }
+        val code = chefe.createInvite(ana.account.value!!.userId).code
+        chefe.stop()
+        val tablet = newClient("ana-tablet-11")
+        val tacc = tablet.pair(url, code, "Tablet da Ana", null)
+        online(tablet)
+        // O Chefe escreve sem internet, com o cadeado do tablet ainda desconhecido.
+        chefe.send(conv, "escrevi offline")
+        assertEquals(2, chefe.store.deviceKeysFor(conv).size)
+        chefe.start()
+        eventually("tablet abrir") { bodies(tablet, conv).lastOrNull() == "escrevi offline" }
+        eventually("celular da Ana abrir") { bodies(ana, conv).lastOrNull() == "escrevi offline" }
+        eventually("✓ no Chefe") { chefe.store.messages(conv).last().status == MessageStatus.SENT }
+        assertTrue(chefe.store.deviceKeysFor(conv).containsKey(tacc.deviceId))
+    }
+
+    @Test
+    fun `app antigo recebe aviso para atualizar`() = runBlocking<Unit> {
+        val (chefe, ana, conv) = family()
+        eventually("Chefe conhecer a Ana") { chefe.store.deviceKeysFor(conv).size == 2 }
+        // Aparelho antigo da Ana (protocolo 2): sem cadeado.
+        val code = chefe.createInvite(ana.account.value!!.userId).code
+        val pair = okhttp3.OkHttpClient().newCall(
+            okhttp3.Request.Builder().url("$url/api/pair")
+                .post(app.falai.protocol.FalaiJson.encodeToString(app.falai.protocol.PairRequest.serializer(), app.falai.protocol.PairRequest(code, "Antigo"))
+                    .toByteArray().let { okhttp3.RequestBody.create(null, it) })
+                .build(),
+        ).execute().use { app.falai.protocol.FalaiJson.decodeFromString(app.falai.protocol.PairResponse.serializer(), it.body!!.string()) }
+        val got = java.util.concurrent.LinkedBlockingQueue<String>()
+        val ws = okhttp3.OkHttpClient().newWebSocket(
+            okhttp3.Request.Builder().url("$url/ws?p=2").header("Authorization", "Bearer ${pair.token}").build(),
+            object : okhttp3.WebSocketListener() {
+                override fun onMessage(webSocket: okhttp3.WebSocket, text: String) { got.add(text) }
+            },
+        )
+        eventually("antigo conectar") { got.any { it.contains("\"hello\"") } }
+        chefe.send(conv, "mensagem nova trancada")
+        eventually("antigo receber o aviso") { got.any { it.contains(app.falai.protocol.SEALED_OLD_APP_TEXT) } }
+        assertTrue(got.none { it.contains("mensagem nova trancada") })
+        // O celular novo da Ana abre normalmente (o antigo não tem cadeado e não atrapalha).
+        eventually("Ana abrir") { bodies(ana, conv).lastOrNull() == "mensagem nova trancada" }
+        ws.cancel()
+    }
+
+    @Test
+    fun `cadeado - trancar e abrir, e ninguem mais abre`() {
+        val a = E2e.newKeys(); val b = E2e.newKeys(); val c = E2e.newKeys()
+        val payload = app.falai.protocol.SealedPayload("olá ✓ çã 😀")
+        val s = E2e.seal(payload, "m1", "c1", "devA", a, mapOf("devA" to a.publicB64, "devB" to b.publicB64))
+        assertEquals(setOf("devA", "devB"), s.keys.keys)
+        val trust = { k: String -> k == a.publicB64 }
+        assertEquals(payload, E2e.open(s, "m1", "c1", "devA", "devB", b, trust))
+        assertEquals(payload, E2e.open(s, "m1", "c1", "devA", "devA", a, trust))
+        // Outro aparelho, outra mensagem, outra conversa, outro remetente, cadeado desconhecido: não abre.
+        assertEquals(null, E2e.open(s, "m1", "c1", "devA", "devB", c, trust))
+        assertEquals(null, E2e.open(s, "m2", "c1", "devA", "devB", b, trust))
+        assertEquals(null, E2e.open(s, "m1", "c2", "devA", "devB", b, trust))
+        assertEquals(null, E2e.open(s, "m1", "c1", "devX", "devB", b, trust))
+        assertEquals(null, E2e.open(s, "m1", "c1", "devA", "devB", b) { false })
+        // Mexeram no conteúdo: não abre.
+        val ct = E2e.unb64(s.ct).also { it[3] = (it[3].toInt() xor 1).toByte() }
+        assertEquals(null, E2e.open(s.copy(ct = E2e.b64(ct)), "m1", "c1", "devA", "devB", b, trust))
+    }
+
+    @Test
+    fun `cadeado - arquivos de varios tamanhos e arquivo mexido`() {
+        val key = E2e.random(32); val nonce = E2e.random(12)
+        for (size in listOf(0, 1, 1000, E2e.FILE_CHUNK - 1, E2e.FILE_CHUNK, E2e.FILE_CHUNK + 1, 2 * E2e.FILE_CHUNK, 2 * E2e.FILE_CHUNK + 777)) {
+            val src = randomFile("p$size", size, size)
+            val enc = File(dir, "e$size"); val out = File(dir, "o$size")
+            E2e.encryptFile(src, enc, key, nonce)
+            assertEquals(E2e.encryptedSize(size.toLong()), enc.length(), "tamanho $size")
+            E2e.decryptFile(enc, out, key, nonce)
+            kotlin.test.assertContentEquals(src.readBytes(), out.readBytes(), "conteúdo $size")
+        }
+        val src = randomFile("big", 2 * E2e.FILE_CHUNK + 10, 5)
+        val enc = File(dir, "big.enc"); E2e.encryptFile(src, enc, key, nonce)
+        // Cortaram o último pedaço: dá erro (não aceita arquivo pela metade).
+        val cut = File(dir, "cut.enc").apply { writeBytes(enc.readBytes().copyOf((2 * (E2e.FILE_CHUNK + 16)))) }
+        assertFailsWith<Exception> { E2e.decryptFile(cut, File(dir, "x1"), key, nonce) }
+        // Mexeram num byte: dá erro.
+        val bad = File(dir, "bad.enc").apply { writeBytes(enc.readBytes().also { it[100] = (it[100].toInt() xor 1).toByte() }) }
+        assertFailsWith<Exception> { E2e.decryptFile(bad, File(dir, "x2"), key, nonce) }
+        // Chave errada: dá erro.
+        assertFailsWith<Exception> { E2e.decryptFile(enc, File(dir, "x3"), E2e.random(32), nonce) }
     }
 }

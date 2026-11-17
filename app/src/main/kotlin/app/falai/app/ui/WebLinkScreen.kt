@@ -96,9 +96,9 @@ fun WebLinkScreen(client: FalaiClient, onBack: () -> Unit) {
     // Endereço que a pessoa digita no computador.
     val address = (publicBase ?: account?.serverUrl ?: "").removePrefix("https://").removePrefix("http://").trimEnd('/') + "/web"
 
-    Column(Modifier.fillMaxSize().background(Color.White).imePadding()) {
+    Column(Modifier.fillMaxSize().background(FalaiColors.Surface).imePadding()) {
         Row(
-            Modifier.fillMaxWidth().background(FalaiColors.Primary).statusBarsPadding()
+            Modifier.fillMaxWidth().background(FalaiColors.Header).statusBarsPadding()
                 .padding(horizontal = 4.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

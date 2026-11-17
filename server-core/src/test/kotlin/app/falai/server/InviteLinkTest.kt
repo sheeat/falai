@@ -175,7 +175,9 @@ class InviteLinkTest {
         assertTrue(baixado.headers["Content-Disposition"]!!.contains("falai.apk"))
         // A página do convite agora oferece o download.
         val inv = invite(admin.token)
-        assertTrue(http.get("$base/convite/${inv.code}").bodyAsText().contains("/app/falai.apk"))
+        assertTrue(http.get("$base/convite/${inv.code}").bodyAsText().contains("/convite/${inv.code}/falai.apk"))
+        // Um arquivo que não tem assinatura v2 não dá para carimbar: vai como está.
+        assertContentEquals(apk, http.get("$base/convite/${inv.code}/falai.apk").bodyAsBytes())
     }
 
     @Test

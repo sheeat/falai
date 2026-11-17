@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tema do app: cores do Falaí nas partes do sistema (barra de cima, destaques). -->
+    <style name="Theme.Falai" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:statusBarColor">@color/falai_primary</item>
+        <item name="android:navigationBarColor">@android:color/white</item>
+        <item name="android:colorAccent">@color/falai_primary</item>
+        <item name="android:colorPrimary">@color/falai_primary</item>
+    </style>
+</resources>

@@ -39,6 +39,8 @@ dependencies {
     testImplementation("io.ktor:ktor-client-cio:$ktorVersion")
     testImplementation("io.ktor:ktor-client-websockets:$ktorVersion")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+    // Só nos testes: assina e confere um APK de mentira (o carimbo do convite não pode quebrar a assinatura).
+    testImplementation("com.android.tools.build:apksig:2.3.0")
 }
 
 application {
@@ -48,6 +50,8 @@ application {
 
 tasks.test {
     useJUnitPlatform()
+    // A biblioteca de assinatura de APK (só nos testes) usa uma parte interna do Java.
+    jvmArgs("--add-exports", "java.base/sun.security.x509=ALL-UNNAMED", "--add-exports", "java.base/sun.security.pkcs=ALL-UNNAMED")
     testLogging {
         events("passed", "failed", "skipped")
         showStandardStreams = false

@@ -14,7 +14,17 @@ import kotlinx.serialization.json.Json
  * WebSocket (/ws, cabeçalho "Authorization: Bearer <token>"):
  *   cada quadro é um objeto JSON com o campo "type".
  */
-const val PROTOCOL_VERSION = 1
+const val PROTOCOL_VERSION = 3
+
+/**
+ * Versão do protocolo que o aparelho entende, enviada no endereço do WebSocket ("/ws?p=2").
+ * Aparelhos antigos (sem "p") não recebem reações e "apagado para todos" como mensagens soltas.
+ * Antes do 3, também não entendem mensagens trancadas: recebem um aviso para atualizar.
+ */
+const val CLIENT_PROTOCOL_PARAM = "p"
+
+/** Versão do Falaí (servidor e página web). O app usa a do build.gradle. */
+const val FALAI_VERSION = "0.11.0"
 
 val FalaiJson = Json {
     classDiscriminator = "type"
@@ -37,6 +47,12 @@ data class PairRequest(
      * reconhece e responde de novo, em vez de dizer que o convite já foi usado.
      */
     val attemptId: String? = null,
+    /**
+     * Identidade deste aparelho, que sobrevive a desinstalar e instalar de novo (no Android, vem do
+     * ANDROID_ID). Se o servidor já conhece este aparelho, ele volta para a mesma pessoa, sem
+     * criar outra conta.
+     */
+    val installKey: String? = null,
 )
 
 @Serializable
@@ -45,7 +61,18 @@ data class PairResponse(
     val deviceId: String,
     val token: String,
     val isAdmin: Boolean,
+    /** Nome da pessoa (para dizer "Bem-vindo de volta, Ana"). */
+    val userName: String? = null,
+    /** true = o aparelho já era conhecido e voltou para a mesma pessoa. */
+    val returning: Boolean = false,
 )
+
+/**
+ * POST /api/reconnect: o app foi instalado de novo (ou os dados foram apagados) num aparelho que o
+ * servidor já conhece. Volta sem convite. 404 = aparelho desconhecido (aí precisa de convite).
+ */
+@Serializable
+data class ReconnectRequest(val installKey: String, val deviceName: String)
 
 @Serializable
 data class ErrorResponse(val error: String, val message: String)
@@ -59,7 +86,40 @@ data class UserDto(
     val isAdmin: Boolean,
     /** Foto de perfil (um arquivo já enviado ao servidor), ou null. */
     val avatarMediaId: String? = null,
+    /** O administrador tirou a pessoa da família (as mensagens antigas continuam com o nome dela). */
+    val removed: Boolean = false,
+    /** Cadeados (chaves públicas) dos aparelhos da pessoa, para trancar mensagens para eles. */
+    val devices: List<DeviceKeyDto> = emptyList(),
 )
+
+/** O cadeado de um aparelho: chave pública ECDH P-256, 65 bytes "crus" (0x04|X|Y) em base64. */
+@Serializable
+data class DeviceKeyDto(val deviceId: String, val publicKey: String)
+
+/**
+ * Mensagem trancada (ponta a ponta). O conteúdo ([SealedPayload] em JSON) vai em [ct], trancado
+ * com uma chave nova a cada mensagem; essa chave vai em [keys], trancada para cada aparelho.
+ * Veja o arquivo E2e.kt (celular) e a página web para as contas.
+ */
+@Serializable
+data class SealedDto(
+    val v: Int = 1,
+    /** Cadeado do aparelho que mandou (quem recebe confere se é o que conhece). */
+    val senderKey: String,
+    /** IV (12 bytes, base64) de [ct]. */
+    val iv: String,
+    /** O conteúdo trancado (AES-256-GCM), base64. */
+    val ct: String,
+    /** id do aparelho -> chave da mensagem trancada para ele (IV de 12 bytes + chave + etiqueta), base64. */
+    val keys: Map<String, String>,
+)
+
+/** O que vai dentro da mensagem trancada. */
+@Serializable
+data class SealedPayload(val body: String = "", val attachment: AttachmentDto? = null)
+
+/** Texto que aparelhos com app antigo veem no lugar de uma mensagem trancada. */
+const val SEALED_OLD_APP_TEXT = "🔒 Mensagem protegida. Atualize o Falaí para ler."
 
 @Serializable
 data class ConversationDto(
@@ -68,7 +128,29 @@ data class ConversationDto(
     val title: String?,
     val memberIds: List<String>,
     val createdAt: Long,
+    /** A pessoa apagou a conversa até esta mensagem: as mais antigas somem dos aparelhos dela. */
+    val clearedSeq: Long? = null,
+    /** Grupo: foto (um arquivo já enviado ao servidor), ou null. */
+    val avatarMediaId: String? = null,
+    /** Quem criou (no grupo, quem criou e o administrador da família podem tirar pessoas). */
+    val createdBy: String? = null,
+    /** Até onde cada participante já recebeu e já leu (para os tiques ✓✓). */
+    val receipts: List<ReceiptDto> = emptyList(),
 )
+
+/** Até qual mensagem (seq) a pessoa já recebeu em algum aparelho e já leu. */
+@Serializable
+data class ReceiptDto(val userId: String, val deliveredSeq: Long = 0, val readSeq: Long = 0)
+
+/** Tipos especiais de [MessageDto.kind]. Null = mensagem normal. */
+object MessageKinds {
+    /** Aviso do grupo ("Ana adicionou Bia"): aparece no meio da conversa, sem balão. */
+    const val SYSTEM = "system"
+    /** Reação: [MessageDto.refId] = mensagem, [MessageDto.body] = emoji ("" = tirou a reação). */
+    const val REACTION = "reaction"
+    /** Apagada para todos: [MessageDto.refId] = mensagem apagada. */
+    const val DELETE = "delete"
+}
 
 @Serializable
 data class MessageDto(
@@ -83,6 +165,18 @@ data class MessageDto(
     val createdAt: Long,
     /** Foto, vídeo, áudio ou arquivo anexado (o arquivo em si é baixado à parte, sob demanda). */
     val attachment: AttachmentDto? = null,
+    /** Null = mensagem normal; veja [MessageKinds]. */
+    val kind: String? = null,
+    /** Reação ou "apagar para todos": a mensagem de que se trata. */
+    val refId: String? = null,
+    /** Resposta a outra mensagem (o id dela). */
+    val replyToId: String? = null,
+    /** Apagada para todos pelo autor (o texto e o anexo já vêm vazios). */
+    val deleted: Boolean = false,
+    /** Reações: pessoa -> emoji. */
+    val reactions: Map<String, String> = emptyMap(),
+    /** Mensagem trancada: o texto e o anexo de verdade estão aqui dentro ([body] vem vazio). */
+    val sealed: SealedDto? = null,
 )
 
 @Serializable
@@ -101,6 +195,15 @@ data class AttachmentDto(
      * antes de baixar, como nos outros mensageiros. No máximo [MAX_THUMB_CHARS] caracteres.
      */
     val thumb: String? = null,
+    /**
+     * Arquivo trancado (só dentro de uma mensagem trancada): a chave (32 bytes, base64), o
+     * "nonce" (12 bytes, base64) e o tamanho e o SHA-256 do arquivo trancado que está no servidor.
+     * [size] e [sha256] continuam sendo os do arquivo original.
+     */
+    val key: String? = null,
+    val nonce: String? = null,
+    val encSize: Long? = null,
+    val encSha256: String? = null,
 )
 
 /** Tamanho máximo da miniatura em base64 (cerca de 18 KB de JPEG). */
@@ -121,11 +224,24 @@ fun sanitizeThumb(thumb: String?): String? =
 object InviteLinks {
     fun page(base: String, code: String) = "${base.trimEnd('/')}/convite/$code"
 
-    fun appUri(base: String, code: String, forExistingUser: Boolean = false): String =
-        "falai://convite?s=" + java.net.URLEncoder.encode(base.trimEnd('/'), "UTF-8") + "&c=" + code +
-            (if (forExistingUser) "&d=1" else "")
+    private fun enc(s: String) = java.net.URLEncoder.encode(s, "UTF-8").replace("+", "%20")
 
-    data class Parsed(val server: String, val code: String, val forExistingUser: Boolean)
+    fun appUri(base: String, code: String, forExistingUser: Boolean = false, name: String? = null): String =
+        "falai://convite?s=" + enc(base.trimEnd('/')) + "&c=" + code +
+            (if (forExistingUser) "&d=1" else "") +
+            (name?.takeIf { it.isNotBlank() }?.let { "&n=" + enc(it.trim()) } ?: "")
+
+    /** Carimbo do APK baixado sem convite: só o endereço, para o app achar o servidor sozinho. */
+    fun serverUri(base: String): String = "falai://servidor?s=" + enc(base.trimEnd('/'))
+
+    /** Endereço de um texto "falai://servidor?s=..." (ou de um convite). */
+    fun parseServer(text: String): String? {
+        parse(text)?.let { return it.server }
+        val m = Regex("""falai://servidor\?s=([^\s&]+)""").find(text.trim()) ?: return null
+        return java.net.URLDecoder.decode(m.groupValues[1], "UTF-8").takeIf { it.startsWith("http") }
+    }
+
+    data class Parsed(val server: String, val code: String, val forExistingUser: Boolean, val name: String? = null)
 
     /** Entende o link da página, o atalho do app ou um texto colado que contenha um deles. */
     fun parse(text: String): Parsed? {
@@ -136,7 +252,7 @@ object InviteLinks {
             }.toMap()
             val s = params["s"] ?: return null
             val c = params["c"] ?: return null
-            return Parsed(s, c.uppercase(), params["d"] == "1")
+            return Parsed(s, c.uppercase(), params["d"] == "1", params["n"]?.trim()?.take(60)?.takeIf { it.isNotEmpty() })
         }
         Regex("""(https?://[A-Za-z0-9.\-]+(?::\d+)?)/convite/([A-Za-z0-9]+)""").find(t)?.let { m ->
             return Parsed(m.groupValues[1], m.groupValues[2].uppercase(), false)
@@ -178,7 +294,45 @@ data class SendFrame(
     val body: String,
     /** Só depois que o arquivo terminou de subir (MediaStatus.complete). */
     val attachment: AttachmentDto? = null,
+    /** Resposta a outra mensagem da mesma conversa. */
+    val replyToId: String? = null,
+    /** Mensagem trancada ([body] vazio; [attachment] só com o arquivo trancado). */
+    val sealed: SealedDto? = null,
 ) : ClientFrame
+
+/** Este aparelho mostra o seu cadeado (chave pública). Sem resposta; todos recebem [UserUpdatedFrame]. */
+@Serializable @SerialName("device_key")
+data class DeviceKeyFrame(val publicKey: String) : ClientFrame
+
+/** Reagir a uma mensagem ([emoji] = "" tira a reação). Responde com [AckFrame] (pelo [id]). */
+@Serializable @SerialName("react")
+data class ReactFrame(val id: String, val conversationId: String, val messageId: String, val emoji: String) : ClientFrame
+
+/** Apagar para todos (só quem escreveu). Responde com [AckFrame] (pelo [id]). */
+@Serializable @SerialName("delete_message")
+data class DeleteMessageFrame(val id: String, val conversationId: String, val messageId: String) : ClientFrame
+
+/**
+ * Mexer no grupo: nome, foto ([avatarMediaId] = "" tira), pôr e tirar pessoas.
+ * Responde com [ConversationFrame].
+ */
+@Serializable @SerialName("update_group")
+data class UpdateGroupFrame(
+    val requestId: String,
+    val conversationId: String,
+    val title: String? = null,
+    val avatarMediaId: String? = null,
+    val addMemberIds: List<String> = emptyList(),
+    val removeMemberIds: List<String> = emptyList(),
+) : ClientFrame
+
+/** Sair do grupo. Responde com [ConversationFrame] (já sem mim). */
+@Serializable @SerialName("leave_group")
+data class LeaveGroupFrame(val requestId: String, val conversationId: String) : ClientFrame
+
+/** "Recebi até aqui" / "li até aqui" numa conversa (para os tiques ✓✓). Sem resposta. */
+@Serializable @SerialName("receipt")
+data class ReceiptFrame(val conversationId: String, val deliveredSeq: Long = 0, val readSeq: Long = 0) : ClientFrame
 
 @Serializable @SerialName("sync")
 data class SyncFrame(val afterSeq: Long = 0) : ClientFrame
@@ -201,7 +355,21 @@ data class CreateInviteFrame(
     val requestId: String,
     /** Preenchido = convite para ligar mais um aparelho a essa pessoa. Vazio = pessoa nova. */
     val forUserId: String? = null,
+    /** Pessoa nova: o nome que já aparece preenchido para ela (ela pode mudar). */
+    val name: String? = null,
 ) : ClientFrame
+
+/** "Apagar conversa": some da minha lista (em todos os meus aparelhos) até chegar mensagem nova. */
+@Serializable @SerialName("hide_conversation")
+data class HideConversationFrame(val requestId: String, val conversationId: String) : ClientFrame
+
+/** Só o administrador: tira a pessoa da família. Os aparelhos dela são desligados na hora. */
+@Serializable @SerialName("remove_user")
+data class RemoveUserFrame(val requestId: String, val userId: String) : ClientFrame
+
+/** Só o administrador: traz de volta quem foi tirado da família (com os mesmos aparelhos e conversas). */
+@Serializable @SerialName("restore_user")
+data class RestoreUserFrame(val requestId: String, val userId: String) : ClientFrame
 
 @Serializable @SerialName("ping")
 data class PingFrame(val requestId: String) : ClientFrame
@@ -234,7 +402,13 @@ data class HelloFrame(
     val publicBase: String? = null,
     /** Só para o administrador: o "ajudante de chamadas" (TURN da Cloudflare) está configurado. */
     val turnConfigured: Boolean? = null,
+    /** O app do Falaí que está no servidor para baixar (para o app saber se tem versão nova). */
+    val app: AppApkInfo? = null,
 ) : ServerFrame
+
+/** Chegou uma versão nova do app no servidor: os celulares mostram "Atualizar". */
+@Serializable @SerialName("app_update")
+data class AppUpdateFrame(val app: AppApkInfo) : ServerFrame
 
 @Serializable @SerialName("ack")
 data class AckFrame(val id: String, val seq: Long, val createdAt: Long) : ServerFrame
@@ -270,6 +444,14 @@ data class UserUpdatedFrame(val requestId: String?, val user: UserDto) : ServerF
 /** Resposta a [SetPublicAddressFrame]. */
 @Serializable @SerialName("public_address")
 data class PublicAddressFrame(val requestId: String, val publicBase: String) : ServerFrame
+
+/** A conversa foi apagada por mim: sai da lista e as mensagens até [clearedSeq] somem. */
+@Serializable @SerialName("conversation_hidden")
+data class ConversationHiddenFrame(val requestId: String? = null, val conversationId: String, val clearedSeq: Long) : ServerFrame
+
+/** Alguém recebeu ou leu mensagens de uma conversa. */
+@Serializable @SerialName("receipts")
+data class ReceiptsFrame(val conversationId: String, val receipt: ReceiptDto) : ServerFrame
 
 @Serializable @SerialName("pong")
 data class PongFrame(val requestId: String) : ServerFrame

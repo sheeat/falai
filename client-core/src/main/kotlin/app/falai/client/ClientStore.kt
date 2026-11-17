@@ -6,7 +6,11 @@ import app.falai.protocol.AttachmentDto
 import app.falai.protocol.ConversationDto
 import app.falai.protocol.FalaiJson
 import app.falai.protocol.MessageDto
+import app.falai.protocol.MessageKinds
+import app.falai.protocol.ReceiptDto
 import app.falai.protocol.UserDto
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 
 /** Dados do pareamento deste aparelho. */
 data class Account(
@@ -17,8 +21,11 @@ data class Account(
     val isAdmin: Boolean,
 )
 
-/** PENDING = na fila (relógio), SENT = servidor recebeu (✓), RECEIVED = de outra pessoa, FAILED = recusada. */
-enum class MessageStatus { PENDING, SENT, RECEIVED, FAILED }
+/**
+ * PENDING = na fila (relógio), SENT = servidor recebeu (✓), RECEIVED = de outra pessoa, FAILED = recusada.
+ * DELIVERED (✓✓ cinza) e READ (✓✓ azul) não ficam guardados: são calculados pelos recibos dos outros.
+ */
+enum class MessageStatus { PENDING, SENT, RECEIVED, FAILED, DELIVERED, READ }
 
 data class LocalMessage(
     val id: String,
@@ -32,7 +39,17 @@ data class LocalMessage(
     val attachment: AttachmentDto? = null,
     /** Caminho do arquivo neste aparelho, se já existir aqui (enviado daqui ou já baixado). */
     val localPath: String? = null,
-)
+    /** Null = normal; "system" = aviso do grupo (veja [MessageKinds]). */
+    val kind: String? = null,
+    /** Resposta a esta mensagem. */
+    val replyToId: String? = null,
+    /** Apagada para todos. */
+    val deleted: Boolean = false,
+    /** Reações: pessoa -> emoji. */
+    val reactions: Map<String, String> = emptyMap(),
+) {
+    val isSystem get() = kind == MessageKinds.SYSTEM
+}
 
 /** Arquivo deste aparelho esperando para subir. */
 data class OutgoingMedia(
@@ -52,8 +69,12 @@ data class ConversationSummary(
     val lastAuthorId: String?,
     val lastAt: Long?,
     val lastStatus: MessageStatus?,
-    /** Conversa direta: a foto da outra pessoa (id do arquivo), se tiver. */
+    /** Conversa direta: a foto da outra pessoa; grupo: a foto do grupo (id do arquivo), se tiver. */
     val avatarMediaId: String? = null,
+    /** Grupo: quem criou (pode tirar pessoas, junto com o administrador). */
+    val createdBy: String? = null,
+    /** false = saí (ou me tiraram) deste grupo: dá para ler, mas não escrever. */
+    val iAmMember: Boolean = true,
 )
 
 /**
@@ -117,6 +138,39 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
                 db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '3')")
             }
         }
+        if (version < 4) {
+            db.transaction {
+                // 0.9: quem saiu da família continua com o nome nas mensagens antigas.
+                db.execute("ALTER TABLE users ADD COLUMN removed INTEGER NOT NULL DEFAULT 0")
+                db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '4')")
+            }
+        }
+        if (version < 5) {
+            db.transaction {
+                // 0.10: foto do grupo, responder, reagir, apagar para todos, tiques ✓✓.
+                db.execute("ALTER TABLE conversations ADD COLUMN avatar_media_id TEXT")
+                db.execute("ALTER TABLE conversations ADD COLUMN created_by TEXT")
+                db.execute("ALTER TABLE messages ADD COLUMN kind TEXT")
+                db.execute("ALTER TABLE messages ADD COLUMN reply_to_id TEXT")
+                db.execute("ALTER TABLE messages ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0")
+                db.execute("ALTER TABLE messages ADD COLUMN reactions_json TEXT")
+                db.execute(
+                    """CREATE TABLE receipts (
+                        conversation_id TEXT NOT NULL, user_id TEXT NOT NULL,
+                        delivered_seq INTEGER NOT NULL, read_seq INTEGER NOT NULL,
+                        PRIMARY KEY (conversation_id, user_id))"""
+                )
+                db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '5')")
+            }
+        }
+        if (version < 6) {
+            db.transaction {
+                // 0.11: cadeados dos aparelhos (para trancar) e os que já conheci (para conferir quem mandou).
+                db.execute("ALTER TABLE users ADD COLUMN devices_json TEXT")
+                db.execute("CREATE TABLE known_keys (device_id TEXT NOT NULL, public_key TEXT NOT NULL, PRIMARY KEY (device_id, public_key))")
+                db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '6')")
+            }
+        }
     }
 
     // ---------- Configuração ----------
@@ -147,6 +201,37 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
         setConfig("isAdmin", if (a.isAdmin) "1" else "0")
     }
 
+    // ---------- Cadeado deste aparelho ----------
+
+    /** As chaves deste aparelho (criadas na primeira vez). A privada nunca sai daqui. */
+    fun myKeys(): E2e.Keys = db.transaction {
+        val priv = getConfig("e2e_private")
+        val pub = getConfig("e2e_public")
+        if (priv != null && pub != null) return@transaction E2e.Keys(E2e.unb64(priv), E2e.unb64(pub))
+        val k = E2e.newKeys()
+        setConfig("e2e_private", E2e.b64(k.privatePkcs8))
+        setConfig("e2e_public", k.publicB64)
+        k
+    }
+
+    /** Cadeados dos aparelhos de quem participa da conversa (inclusive os meus). */
+    fun deviceKeysFor(conversationId: String): Map<String, String> {
+        val out = LinkedHashMap<String, String>()
+        for (uid in memberIds(conversationId)) user(uid)?.takeIf { !it.removed }?.devices?.forEach { out[it.deviceId] = it.publicKey }
+        return out
+    }
+
+    /** Este cadeado já foi visto neste aparelho [deviceId]? (para aceitar mensagens dele) */
+    fun isKnownKey(deviceId: String, publicKey: String): Boolean =
+        db.query("SELECT 1 AS x FROM known_keys WHERE device_id = ? AND public_key = ?", deviceId, publicKey).isNotEmpty()
+
+    private fun rememberKeys(u: UserDto) {
+        u.devices.forEach { db.execute("INSERT OR IGNORE INTO known_keys (device_id, public_key) VALUES (?, ?)", it.deviceId, it.publicKey) }
+    }
+
+    private fun encodeDevices(u: UserDto) =
+        FalaiJson.encodeToString(kotlinx.serialization.builtins.ListSerializer(app.falai.protocol.DeviceKeyDto.serializer()), u.devices)
+
     /** Maior seq já sincronizado por completo. O próximo sync começa daqui. */
     fun syncedSeq(): Long = getConfig("syncedSeq")?.toLong() ?: 0L
     fun setSyncedSeq(seq: Long) = setConfig("syncedSeq", seq.toString())
@@ -156,38 +241,111 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
     fun replaceUsers(users: List<UserDto>) = db.transaction {
         db.execute("DELETE FROM users")
         users.forEach {
-            db.execute("INSERT INTO users (id, name, is_admin, avatar_media_id) VALUES (?, ?, ?, ?)", it.id, it.name, it.isAdmin, it.avatarMediaId)
+            db.execute(
+                "INSERT INTO users (id, name, is_admin, avatar_media_id, removed, devices_json) VALUES (?, ?, ?, ?, ?, ?)",
+                it.id, it.name, it.isAdmin, it.avatarMediaId, it.removed, encodeDevices(it),
+            )
+            rememberKeys(it)
         }
     }
 
-    fun upsertUser(u: UserDto) {
+    fun upsertUser(u: UserDto) = db.transaction {
         db.execute(
-            "INSERT OR REPLACE INTO users (id, name, is_admin, avatar_media_id) VALUES (?, ?, ?, ?)",
-            u.id, u.name, u.isAdmin, u.avatarMediaId,
+            "INSERT OR REPLACE INTO users (id, name, is_admin, avatar_media_id, removed, devices_json) VALUES (?, ?, ?, ?, ?, ?)",
+            u.id, u.name, u.isAdmin, u.avatarMediaId, u.removed, encodeDevices(u),
         )
+        rememberKeys(u)
     }
 
-    fun users(): List<UserDto> =
-        db.query("SELECT * FROM users ORDER BY name COLLATE NOCASE")
-            .map { UserDto(it.string("id"), it.string("name"), it.bool("is_admin"), it.stringOrNull("avatar_media_id")) }
+    private fun rowToUser(it: Row) =
+        UserDto(
+            it.string("id"), it.string("name"), it.bool("is_admin"), it.stringOrNull("avatar_media_id"), it.bool("removed"),
+            devices = it.stringOrNull("devices_json")?.let { j ->
+                runCatching {
+                    FalaiJson.decodeFromString(kotlinx.serialization.builtins.ListSerializer(app.falai.protocol.DeviceKeyDto.serializer()), j)
+                }.getOrNull()
+            } ?: emptyList(),
+        )
+
+    /** Todo mundo, inclusive quem saiu da família (veja [UserDto.removed]). */
+    fun users(): List<UserDto> = db.query("SELECT * FROM users ORDER BY name COLLATE NOCASE").map(::rowToUser)
+
+    /** Quem está na família hoje (para começar conversa, por exemplo). */
+    fun activeUsers(): List<UserDto> = users().filter { !it.removed }
 
     fun user(id: String): UserDto? =
-        db.query("SELECT * FROM users WHERE id = ?", id).firstOrNull()
-            ?.let { UserDto(it.string("id"), it.string("name"), it.bool("is_admin"), it.stringOrNull("avatar_media_id")) }
+        db.query("SELECT * FROM users WHERE id = ?", id).firstOrNull()?.let(::rowToUser)
 
     fun userName(id: String): String? =
         db.query("SELECT name FROM users WHERE id = ?", id).firstOrNull()?.string("name")
 
     fun upsertConversation(c: ConversationDto) = db.transaction {
         db.execute(
-            "INSERT OR REPLACE INTO conversations (id, kind, title, created_at) VALUES (?, ?, ?, ?)",
-            c.id, c.kind, c.title, c.createdAt,
+            "INSERT OR REPLACE INTO conversations (id, kind, title, created_at, avatar_media_id, created_by) VALUES (?, ?, ?, ?, ?, ?)",
+            c.id, c.kind, c.title, c.createdAt, c.avatarMediaId, c.createdBy,
         )
         db.execute("DELETE FROM members WHERE conversation_id = ?", c.id)
         c.memberIds.forEach { db.execute("INSERT INTO members (conversation_id, user_id) VALUES (?, ?)", c.id, it) }
+        c.receipts.forEach { saveReceipt(c.id, it) }
     }
 
-    private fun memberIds(conversationId: String) =
+    // ---------- Recibos (✓✓) ----------
+
+    /** Guarda até onde a pessoa recebeu/leu (nunca volta para trás). */
+    fun saveReceipt(conversationId: String, r: ReceiptDto) = db.transaction {
+        val old = receipts(conversationId)[r.userId]
+        val d = maxOf(old?.deliveredSeq ?: 0, r.deliveredSeq, r.readSeq)
+        val rd = maxOf(old?.readSeq ?: 0, r.readSeq)
+        db.execute(
+            "INSERT OR REPLACE INTO receipts (conversation_id, user_id, delivered_seq, read_seq) VALUES (?, ?, ?, ?)",
+            conversationId, r.userId, d, rd,
+        )
+    }
+
+    fun receipts(conversationId: String): Map<String, ReceiptDto> =
+        db.query("SELECT * FROM receipts WHERE conversation_id = ?", conversationId)
+            .associate { it.string("user_id") to ReceiptDto(it.string("user_id"), it.long("delivered_seq"), it.long("read_seq")) }
+
+    /**
+     * O tique de uma mensagem minha: ✓ (servidor recebeu), ✓✓ cinza (chegou para todos),
+     * ✓✓ azul (todos leram). Para as dos outros, devolve o que estiver guardado.
+     */
+    fun displayStatus(m: LocalMessage, myUserId: String): MessageStatus {
+        if (m.status != MessageStatus.SENT || m.seq == null || m.authorId != myUserId) return m.status
+        val others = memberIds(m.conversationId).filter { it != myUserId }
+        if (others.isEmpty()) return m.status
+        val rs = receipts(m.conversationId)
+        return when {
+            others.all { (rs[it]?.readSeq ?: 0) >= m.seq } -> MessageStatus.READ
+            others.all { (rs[it]?.deliveredSeq ?: 0) >= m.seq } -> MessageStatus.DELIVERED
+            else -> m.status
+        }
+    }
+
+    /** Maior seq de mensagens dos outros nesta conversa (para dizer "recebi/li até aqui"). */
+    fun lastSeqFromOthers(conversationId: String, myUserId: String): Long =
+        db.query(
+            "SELECT COALESCE(MAX(seq), 0) AS s FROM messages WHERE conversation_id = ? AND author_id <> ? AND seq IS NOT NULL",
+            conversationId, myUserId,
+        ).first().long("s")
+
+    /** Conversa apagada (por mim, aqui ou em outro aparelho): some com ela e com as mensagens. */
+    fun deleteConversation(id: String) = db.transaction {
+        db.execute("DELETE FROM outgoing WHERE message_id IN (SELECT id FROM messages WHERE conversation_id = ?)", id)
+        db.execute("DELETE FROM messages WHERE conversation_id = ?", id)
+        db.execute("DELETE FROM members WHERE conversation_id = ?", id)
+        db.execute("DELETE FROM receipts WHERE conversation_id = ?", id)
+        db.execute("DELETE FROM conversations WHERE id = ?", id)
+    }
+
+    /** Apaga as mensagens até [seq] (a conversa foi apagada e voltou com mensagem nova). */
+    fun clearMessagesUpTo(conversationId: String, seq: Long) {
+        db.execute("DELETE FROM messages WHERE conversation_id = ? AND seq IS NOT NULL AND seq <= ?", conversationId, seq)
+    }
+
+    fun conversationIds(): List<String> = db.query("SELECT id FROM conversations").map { it.string("id") }
+
+    fun memberIds(conversationId: String) =
         db.query("SELECT user_id FROM members WHERE conversation_id = ? ORDER BY user_id", conversationId)
             .map { it.string("user_id") }
 
@@ -208,6 +366,7 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
             ).firstOrNull()
             val shown = newestPending ?: last
             val other = if (kind == "direct") members.firstOrNull { it != myUserId }?.let(::user) else null
+            val lastMsg = shown?.let(::rowToMessage)
             val name = if (kind == "direct") {
                 members.firstOrNull { it != myUserId }?.let { userName(it) } ?: "Conversa"
             } else {
@@ -218,11 +377,13 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
                 kind = kind,
                 displayName = name,
                 memberIds = members,
-                lastBody = shown?.let { preview(it.string("body"), it.stringOrNull("attachment_json")?.let(::decodeAtt)) },
-                lastAuthorId = shown?.string("author_id"),
-                lastAt = shown?.long("created_at") ?: c.long("created_at"),
-                lastStatus = shown?.let { MessageStatus.valueOf(it.string("status")) },
-                avatarMediaId = other?.avatarMediaId,
+                lastBody = lastMsg?.let { if (it.deleted) DELETED_LABEL else preview(it.body, it.attachment) },
+                lastAuthorId = lastMsg?.takeIf { !it.isSystem }?.authorId,
+                lastAt = lastMsg?.createdAt ?: c.long("created_at"),
+                lastStatus = lastMsg?.let { displayStatus(it, myUserId) },
+                avatarMediaId = if (kind == "direct") other?.avatarMediaId else c.stringOrNull("avatar_media_id"),
+                createdBy = c.stringOrNull("created_by"),
+                iAmMember = kind == "direct" || myUserId in members,
             )
         }.sortedByDescending { it.lastAt ?: 0 }
     }
@@ -249,7 +410,35 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
             status = MessageStatus.valueOf(r.string("status")),
             attachment = att,
             localPath = path,
+            kind = r.stringOrNull("kind"),
+            replyToId = r.stringOrNull("reply_to_id"),
+            deleted = r.bool("deleted"),
+            reactions = r.stringOrNull("reactions_json")?.let(::decodeReactions) ?: emptyMap(),
         )
+    }
+
+    private val reactionsSer = MapSerializer(String.serializer(), String.serializer())
+    private fun decodeReactions(json: String): Map<String, String> =
+        runCatching { FalaiJson.decodeFromString(reactionsSer, json) }.getOrDefault(emptyMap())
+    private fun encodeReactions(r: Map<String, String>): String? =
+        if (r.isEmpty()) null else FalaiJson.encodeToString(reactionsSer, r)
+
+    /** Alguém reagiu ("" = tirou a reação). */
+    fun applyReaction(messageId: String, userId: String, emoji: String) = db.transaction {
+        val m = messageById(messageId) ?: return@transaction
+        if (m.deleted) return@transaction
+        val r = m.reactions.toMutableMap()
+        if (emoji.isEmpty()) r.remove(userId) else r[userId] = emoji
+        db.update("UPDATE messages SET reactions_json = ? WHERE id = ?", encodeReactions(r), messageId)
+    }
+
+    /** Apagada para todos: some o texto, o anexo e as reações. */
+    fun applyDelete(messageId: String) {
+        db.update(
+            "UPDATE messages SET body = '', attachment_json = NULL, reactions_json = NULL, deleted = 1 WHERE id = ?",
+            messageId,
+        )
+        db.update("DELETE FROM outgoing WHERE message_id = ?", messageId)
     }
 
     /** Mensagens da conversa em ordem: confirmadas pelo servidor primeiro, depois as da fila. */
@@ -334,11 +523,11 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
         db.execute("INSERT OR REPLACE INTO local_media (media_id, path) VALUES (?, ?)", mediaId, path)
     }
 
-    fun insertPending(id: String, conversationId: String, authorId: String, body: String): LocalMessage {
-        val m = LocalMessage(id, null, conversationId, authorId, body, clock(), MessageStatus.PENDING)
+    fun insertPending(id: String, conversationId: String, authorId: String, body: String, replyToId: String? = null): LocalMessage {
+        val m = LocalMessage(id, null, conversationId, authorId, body, clock(), MessageStatus.PENDING, replyToId = replyToId)
         db.execute(
-            "INSERT INTO messages (id, seq, conversation_id, author_id, body, created_at, status) VALUES (?, NULL, ?, ?, ?, ?, 'PENDING')",
-            m.id, m.conversationId, m.authorId, m.body, m.createdAt,
+            "INSERT INTO messages (id, seq, conversation_id, author_id, body, created_at, status, reply_to_id) VALUES (?, NULL, ?, ?, ?, ?, 'PENDING', ?)",
+            m.id, m.conversationId, m.authorId, m.body, m.createdAt, replyToId,
         )
         return m
     }
@@ -353,24 +542,56 @@ class ClientStore(private val db: Db, private val clock: () -> Long = System::cu
 
     /** Guarda uma mensagem vinda do servidor. Repetida (pelo id) só atualiza. */
     fun upsertFromServer(m: MessageDto, myUserId: String) {
+        // Reação e "apagar para todos" mudam outra mensagem; não aparecem sozinhas.
+        when (m.kind) {
+            MessageKinds.REACTION -> { m.refId?.let { applyReaction(it, m.authorId, m.body) }; return }
+            MessageKinds.DELETE -> { m.refId?.let(::applyDelete); return }
+        }
         val status = if (m.authorId == myUserId) MessageStatus.SENT else MessageStatus.RECEIVED
+        val body = if (m.deleted) "" else m.body
+        val att = if (m.deleted) null else m.attachment
         // Sem "ON CONFLICT ... DO UPDATE": o SQLite do Android 9 é antigo demais para isso.
         db.transaction {
             val changed = db.update(
-                "UPDATE messages SET seq = ?, created_at = ?, status = ?, attachment_json = ? WHERE id = ?",
-                m.seq, m.createdAt, status.name, encodeAtt(m.attachment), m.id,
+                """UPDATE messages SET seq = ?, created_at = ?, status = ?, attachment_json = ?, kind = ?, reply_to_id = ?,
+                   deleted = ?, reactions_json = ? WHERE id = ?""",
+                m.seq, m.createdAt, status.name, encodeAtt(att), m.kind, m.replyToId, m.deleted, encodeReactions(m.reactions), m.id,
             )
             if (changed == 0) {
                 db.execute(
-                    """INSERT INTO messages (id, seq, conversation_id, author_id, body, created_at, status, attachment_json)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    m.id, m.seq, m.conversationId, m.authorId, m.body, m.createdAt, status.name, encodeAtt(m.attachment),
+                    """INSERT INTO messages (id, seq, conversation_id, author_id, body, created_at, status, attachment_json,
+                       kind, reply_to_id, deleted, reactions_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    m.id, m.seq, m.conversationId, m.authorId, body, m.createdAt, status.name, encodeAtt(att),
+                    m.kind, m.replyToId, m.deleted, encodeReactions(m.reactions),
                 )
             }
         }
     }
 
+    /** Atualiza o anexo de uma mensagem minha (ex.: depois de trancar o arquivo). */
+    fun updateAttachment(messageId: String, att: AttachmentDto) {
+        db.update("UPDATE messages SET attachment_json = ? WHERE id = ?", encodeAtt(att), messageId)
+    }
+
+    /** Mensagem trancada que este aparelho não conseguiu abrir: atualiza só a ordem e o estado. */
+    fun upsertUnreadable(m: MessageDto, myUserId: String) = db.transaction {
+        val status = if (m.authorId == myUserId) MessageStatus.SENT else MessageStatus.RECEIVED
+        val changed = db.update("UPDATE messages SET seq = ?, created_at = ?, status = ? WHERE id = ?", m.seq, m.createdAt, status.name, m.id)
+        if (changed == 0) {
+            db.execute(
+                """INSERT INTO messages (id, seq, conversation_id, author_id, body, created_at, status, reply_to_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                m.id, m.seq, m.conversationId, m.authorId, LOCKED_LABEL, m.createdAt, status.name, m.replyToId,
+            )
+        }
+    }
+
     companion object {
+        const val DELETED_LABEL = "🚫 Mensagem apagada"
+        /** Mensagem trancada que não era para este aparelho (ex.: enviada antes dele entrar). */
+        const val LOCKED_LABEL = "🔒 Não deu para abrir esta mensagem neste aparelho."
+
         /** Texto curto para a lista de conversas: "📷 Foto", "🎤 Áudio (0:42)" etc. */
         fun preview(body: String, att: AttachmentDto?): String {
             if (att == null) return body

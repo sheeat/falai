@@ -1,6 +1,10 @@
 package app.falai.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -42,24 +46,25 @@ import kotlinx.coroutines.launch
 fun NewConversationScreen(client: FalaiClient, onBack: () -> Unit, onCreated: (String) -> Unit) {
     val changes by client.changes.collectAsState()
     val me = client.account.collectAsState().value?.userId ?: return
-    val people = remember(changes) { client.store.users().filter { it.id != me } }
+    val people = remember(changes) { client.store.activeUsers().filter { it.id != me } }
     val selected = remember { mutableStateListOf<String>() }
     var title by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var groupMode by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     // Atualiza a lista de pessoas (alguém pode ter entrado na família agora).
     LaunchedEffect(Unit) { runCatching { client.refreshUsers() } }
 
-    Column(Modifier.fillMaxSize().background(Color.White)) {
+    Column(Modifier.fillMaxSize().background(FalaiColors.Surface)) {
         Row(
-            Modifier.fillMaxWidth().background(FalaiColors.Primary).statusBarsPadding()
+            Modifier.fillMaxWidth().background(FalaiColors.Header).statusBarsPadding()
                 .padding(horizontal = 4.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             BackButton(onClick = onBack)
-            Text("Nova conversa", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
+            Text("Nova conversa ou grupo", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
         }
 
         if (people.isEmpty()) {
@@ -69,55 +74,94 @@ fun NewConversationScreen(client: FalaiClient, onBack: () -> Unit, onCreated: (S
             )
         }
 
-        LazyColumn(Modifier.weight(1f)) {
-            items(people, key = { it.id }) { p ->
-                Row(
-                    Modifier.fillMaxWidth().clickable {
-                        if (p.id in selected) selected.remove(p.id) else selected.add(p.id)
-                    }.padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Avatar(p.name, size = 40.dp)
-                    Spacer(Modifier.width(14.dp))
-                    Text(p.name, fontSize = 16.sp, modifier = Modifier.weight(1f))
-                    Checkbox(checked = p.id in selected, onCheckedChange = null)
+        fun create(kind: String, ids: List<String>, name: String?) {
+            if (busy) return
+            busy = true
+            error = null
+            scope.launch {
+                try {
+                    onCreated(client.createConversation(kind, name, ids).id)
+                } catch (e: Exception) {
+                    error = e.message ?: "Não deu para criar a conversa."
+                } finally {
+                    busy = false
                 }
             }
         }
 
-        Column(Modifier.navigationBarsPadding().padding(16.dp)) {
-            val isGroup = selected.size > 1
-            if (isGroup) {
+        LazyColumn(Modifier.weight(1f)) {
+            if (people.isNotEmpty()) {
+                item(key = "grupo") {
+                    // "Novo grupo": liga a escolha de várias pessoas.
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .background(if (groupMode) FalaiColors.ChatBg else FalaiColors.Surface)
+                            .clickable { groupMode = !groupMode; selected.clear() }
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier.size(40.dp).clip(CircleShape).background(FalaiColors.Primary),
+                            contentAlignment = Alignment.Center,
+                        ) { Text("👥", fontSize = 20.sp) }
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Novo grupo", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = FalaiColors.Primary)
+                            Text(
+                                if (groupMode) "Marque as pessoas do grupo e dê um nome" else "Conversa com várias pessoas juntas",
+                                fontSize = 13.sp, color = FalaiColors.TextSec,
+                            )
+                        }
+                        if (groupMode) Text("✕", fontSize = 18.sp, color = FalaiColors.TextSec)
+                    }
+                }
+                item(key = "titulo") {
+                    Text(
+                        if (groupMode) "Quem vai estar no grupo?" else "Conversar com",
+                        fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = FalaiColors.TextSec,
+                        modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp),
+                    )
+                }
+            }
+            items(people, key = { it.id }) { p ->
+                Row(
+                    Modifier.fillMaxWidth().clickable(enabled = !busy) {
+                        if (!groupMode) create("direct", listOf(p.id), null)
+                        else if (p.id in selected) selected.remove(p.id) else selected.add(p.id)
+                    }.padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Avatar(p.name, size = 40.dp, client = client, mediaId = p.avatarMediaId)
+                    Spacer(Modifier.width(14.dp))
+                    Text(p.name, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                    if (groupMode) Checkbox(checked = p.id in selected, onCheckedChange = null)
+                }
+            }
+        }
+
+        if (groupMode || error != null) Column(Modifier.navigationBarsPadding().padding(16.dp)) {
+            if (groupMode) {
                 OutlinedTextField(
                     value = title, onValueChange = { title = it },
-                    label = { Text("Nome do grupo") }, singleLine = true,
+                    label = { Text("Nome do grupo (ex.: Família Silva)") }, singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(8.dp))
             }
             error?.let { Text(it, color = FalaiColors.Error); Spacer(Modifier.height(8.dp)) }
-            Button(
-                enabled = !busy && selected.isNotEmpty() && (!isGroup || title.isNotBlank()),
-                onClick = {
-                    busy = true
-                    error = null
-                    scope.launch {
-                        try {
-                            val c = client.createConversation(
-                                if (isGroup) "group" else "direct",
-                                if (isGroup) title.trim() else null,
-                                selected.toList(),
-                            )
-                            onCreated(c.id)
-                        } catch (e: Exception) {
-                            error = e.message ?: "Não deu para criar a conversa."
-                        } finally {
-                            busy = false
-                        }
-                    }
-                },
+            if (groupMode) Button(
+                enabled = !busy && selected.isNotEmpty() && title.isNotBlank(),
+                onClick = { create("group", selected.toList(), title.trim()) },
                 modifier = Modifier.fillMaxWidth().height(50.dp),
-            ) { Text(if (isGroup) "Criar grupo" else "Conversar") }
+            ) {
+                Text(
+                    when {
+                        selected.isEmpty() -> "Marque as pessoas"
+                        title.isBlank() -> "Escreva o nome do grupo"
+                        else -> "Criar grupo (${selected.size + 1} pessoas com você)"
+                    },
+                )
+            }
         }
     }
 }

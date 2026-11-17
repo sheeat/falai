@@ -2,7 +2,7 @@
 
 Mensageiro da família. Um celular antigo fica em casa como servidor, e os celulares e tablets da família se conectam a ele pela internet através do Cloudflare Tunnel.
 
-## Estado atual: 0.8 (chamadas de voz e vídeo)
+## Estado atual: 0.11 (conversas trancadas de ponta a ponta)
 
 | Parte | O que faz | Testado |
 |---|---|---|
@@ -39,7 +39,36 @@ Mensageiro da família. Um celular antigo fica em casa como servidor, e os celul
 - O som e a imagem vão **direto** de um aparelho para o outro (WebRTC); o servidor só apresenta os dois. Para achar o caminho usamos STUN grátis (Google e Cloudflare). Se a chamada ficar em "conectando…" entre dois celulares no 4G, o administrador liga o **Ajudante de chamadas** (TURN da Cloudflare, grátis até 1.000 GB por mês) em *Configurações → Chamadas*.
 - **Tocar com o app fechado** (ligado de fábrica, em *Configurações → Chamadas*): um aviso discreto "Falaí conectado" mantém a conexão. Recomendado tocar em *Não deixar o Android desligar o Falaí*.
 
-Ainda não tem: notificações pelo Google (FCM), editor de vídeo, criptografia no app.
+**Cara profissional (0.9):**
+- **O aparelho é reconhecido:** se a pessoa desinstalar e instalar o Falaí de novo (ou apagar os dados), o app entra sozinho na mesma conta, sem convite. O app usa o ANDROID_ID (o número que o Android dá ao app neste aparelho; MAC e número de série não são mais permitidos) e o servidor guarda só um resumo dele. Um convite novo usado num aparelho conhecido também não cria pessoa repetida.
+- **Convite e app já com o código:** o servidor "carimba" o convite dentro do arquivo do app na hora do download (na área da assinatura que o Android ignora; a assinatura continua válida). Ao abrir, o app já tem o convite: a pessoa só confirma o nome. O administrador pode escrever o nome da pessoa ao convidar, e ele já vem preenchido. O app baixado em `/app/falai.apk` vem com o endereço do servidor.
+- **Apagar conversa** (segurar o dedo na conversa, ou ⋮ dentro dela; no computador, ⋮ ou botão direito): some da lista em todos os seus aparelhos; para os outros nada muda; se chegar mensagem nova, ela volta só com as novas.
+- **Tirar alguém da família** (só o administrador: ⋮ na conversa, ou *Configurações → Pessoas da família*): os aparelhos da pessoa são desligados na hora; as mensagens antigas ficam.
+- **Trazer de volta** (0.9.1, só o administrador: *Configurações → Pessoas da família → Fora da família*, ou ⋮ na conversa): a pessoa volta com os mesmos aparelhos, sem convite novo; é só ela abrir o Falaí.
+- **Ajustar a foto de perfil** (0.9.2, celular e computador): depois de escolher a foto, arrasta, aproxima ou afasta (dois dedos, rodinha do mouse ou barrinha) e gira, dentro de um círculo; sai um quadrado 512×512.
+- **Atualizar o app** (0.9.3): quando o administrador abre o Falaí com uma versão nova, ela vai sozinha para o servidor, e os outros celulares mostram a faixa **"Versão nova do Falaí → Atualizar"** (baixa e instala pelo próprio Falaí; na 1ª vez o Android pede "Permitir desta fonte"). A página do convite e a página `/app` têm o passo a passo ilustrado dos avisos do Android (Play Protect → "Mais detalhes" → "Instalar mesmo assim").
+- **Importante:** gere o APK sempre no mesmo computador (mesma assinatura) e guarde uma cópia de `C:\Users\<você>\.android\debug.keystore`. Com outra assinatura, o Android recusa a atualização.
+- **Fundo das conversas:** cor calma com desenhinhos clarinhos (7 cores, desenhos liga/desliga, ou uma foto da galeria). *Configurações → Fundo das conversas* (no computador, na engrenagem).
+- **Ícone próprio** (balão com a família dentro) no app, no servidor, nos avisos, na tela de abertura; favicon, ícone de "instalar" e página do convite com a marca no computador.
+- Configurações mais limpas: só conexão e versão.
+
+**0.10:**
+- **Mexer no grupo** (celular: toque no nome do grupo ou ⋮ → *Dados do grupo*; computador: clique no nome): nome, foto (com ajuste), pôr pessoas, tirar (quem criou ou o administrador) e sair. Quem sai continua lendo as antigas, mas não escreve. Avisos no meio da conversa ("Ana adicionou Bia").
+- **Computador cria conversa e grupo** (botão ✏️ no topo da lista).
+- **Responder, reagir e apagar para todos**: segurar a mensagem no celular; no computador, botão ⌄ ou clique direito.
+- **Tiques**: ✓ enviada, ✓✓ cinza entregue, ✓✓ azul lida (no grupo: quando todos).
+- **Modo escuro**: *Configurações → Aparência* (igual ao celular/computador, claro ou escuro).
+- Protocolo 2 (`/ws?p=2`); aparelhos com app antigo continuam funcionando (não veem reações; apagada aparece como "🚫 Mensagem apagada").
+
+**0.11: conversas trancadas (criptografia de ponta a ponta):**
+- Cada aparelho (celular ou computador) tem o seu **cadeado**: uma chave pública que vai para o servidor e uma chave privada que **nunca sai do aparelho**.
+- Cada mensagem, foto, vídeo, áudio e arquivo é trancado no aparelho de quem manda, com uma chave nova, e essa chave vai trancada só para os aparelhos de quem está na conversa (ECDH P-256 + HKDF-SHA256 + AES-256-GCM; arquivos em pedaços de 1 MB). O servidor guarda só caixas trancadas: nem o celular-servidor nem a Cloudflare conseguem ler.
+- Se aparece um aparelho novo na conversa (alguém instalou num tablet), o servidor recusa a mensagem sem a chave dele e o app tranca de novo, sozinho.
+- **Limite desta versão:** um aparelho novo (ou o app reinstalado, ou outro navegador) **não abre as mensagens antigas**, porque elas não foram trancadas para ele: aparece "🔒 Não deu para abrir esta mensagem neste aparelho". As novas abrem normalmente. A cópia de segurança com senha vem na 0.12.
+- Continuam abertos para o servidor: quem fala com quem e quando, nome e foto dos grupos, fotos de perfil, reações e avisos do grupo. Chamadas já eram diretas e trancadas (WebRTC).
+- Protocolo 3 (`/ws?p=3`). Aparelhos com app antigo veem "🔒 Mensagem protegida. Atualize o Falaí para ler." Atualize primeiro o servidor, depois os celulares.
+
+Ainda não tem: notificações pelo Google (FCM), editor de vídeo, cópia de segurança das conversas.
 
 ## Rodar os testes (PC)
 

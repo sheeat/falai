@@ -58,13 +58,13 @@ import kotlinx.coroutines.withContext
  * Tudo que muda aqui a família vê na hora.
  */
 @Composable
-fun SettingsScreen(client: FalaiClient, onBack: () -> Unit, onInvite: () -> Unit, onWebLink: () -> Unit) {
+fun SettingsScreen(client: FalaiClient, onBack: () -> Unit, onInvite: () -> Unit, onWebLink: () -> Unit, onWallpaper: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val changes by client.changes.collectAsState()
     val account by client.account.collectAsState()
     val state by client.connection.collectAsState()
-    val publicBase by client.publicBase.collectAsState()
+    var showFamily by remember { mutableStateOf(false) }
     val acc = account ?: return
     val me = remember(changes) { client.store.user(acc.userId) }
     val myName = me?.name ?: ""
@@ -94,14 +94,19 @@ fun SettingsScreen(client: FalaiClient, onBack: () -> Unit, onInvite: () -> Unit
         }
     }
 
+    // Foto escolhida, esperando a pessoa ajustar (zoom, posição) antes de enviar.
+    var cropping by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) run("Enviando a foto…", "Foto trocada! ✔") {
-            val file = withContext(Dispatchers.IO) { makeProfilePhoto(context, uri) }
-                ?: throw FalaiClientException("photo", "Não consegui abrir essa foto. Escolha outra.")
-            try {
-                client.updateProfile(photo = file)
-            } finally {
-                file.delete()
+        if (uri != null && busy == null) {
+            busy = "Abrindo a foto…"
+            message = null
+            scope.launch {
+                val bmp = withContext(Dispatchers.IO) {
+                    val copied = copyFromUri(context, uri)
+                    try { copied?.let { loadThumbnail(it.file, 2048) } } finally { copied?.file?.delete() }
+                }
+                busy = null
+                if (bmp == null) message = "Não consegui abrir essa foto. Escolha outra." else cropping = bmp
             }
         }
     }
@@ -114,9 +119,10 @@ fun SettingsScreen(client: FalaiClient, onBack: () -> Unit, onInvite: () -> Unit
         }
     }
 
-    Column(Modifier.fillMaxSize().background(Color.White).imePadding()) {
+    Box(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize().background(FalaiColors.Surface).imePadding()) {
         Row(
-            Modifier.fillMaxWidth().background(FalaiColors.Primary).statusBarsPadding()
+            Modifier.fillMaxWidth().background(FalaiColors.Header).statusBarsPadding()
                 .padding(horizontal = 4.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -184,6 +190,30 @@ fun SettingsScreen(client: FalaiClient, onBack: () -> Unit, onInvite: () -> Unit
                 )
             }
 
+            // ---- Conversas ----
+            HorizontalDivider(color = FalaiColors.Divider)
+            Text("Conversas", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+            OutlinedButton(onClick = onWallpaper, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                Text("🎨  Fundo das conversas")
+            }
+
+            // ---- Aparência ----
+            HorizontalDivider(color = FalaiColors.Divider)
+            Text("Aparência", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+            val mode = ThemePrefs.mode.value ?: ThemePrefs.AUTO
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for ((id, label) in listOf(ThemePrefs.AUTO to "📱 Igual ao celular", ThemePrefs.LIGHT to "☀️ Claro", ThemePrefs.DARK to "🌙 Escuro")) {
+                    val on = mode == id
+                    OutlinedButton(
+                        onClick = { ThemePrefs.set(context, id) },
+                        colors = if (on) ButtonDefaults.outlinedButtonColors(containerColor = FalaiColors.Primary, contentColor = Color.White)
+                        else ButtonDefaults.outlinedButtonColors(),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp),
+                        modifier = Modifier.weight(1f).height(52.dp),
+                    ) { Text(label, fontSize = 13.sp, textAlign = TextAlign.Center, maxLines = 2) }
+                }
+            }
+
             // ---- Chamadas ----
             HorizontalDivider(color = FalaiColors.Divider)
             Text("Chamadas", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
@@ -202,18 +232,38 @@ fun SettingsScreen(client: FalaiClient, onBack: () -> Unit, onInvite: () -> Unit
                 OutlinedButton(onClick = onInvite, modifier = Modifier.fillMaxWidth().height(48.dp)) {
                     Text("Convidar alguém da família")
                 }
+                OutlinedButton(onClick = { showFamily = true }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                    Text("Pessoas da família")
+                }
             }
 
             // ---- Sobre ----
             HorizontalDivider(color = FalaiColors.Divider)
-            Text("Sobre este aparelho", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
             InfoLine("Conexão", null) { ConnectionBadge(state, onDark = false) }
             InfoLine("Versão do Falaí", appVersion)
-            InfoLine("Servidor", acc.serverUrl)
-            publicBase?.let { InfoLine("Endereço na internet", it) }
-            if (acc.isAdmin) InfoLine("Função", "Administrador da família")
+            UpdateBanner(client)
         }
     }
+    cropping?.let { source ->
+        AvatarCropScreen(
+            source,
+            onCancel = { cropping = null },
+            onDone = { left, top, side, bmp ->
+                cropping = null
+                run("Enviando a foto…", "Foto trocada! ✔") {
+                    val file = withContext(Dispatchers.IO) { saveCroppedAvatar(context, bmp, left, top, side) }
+                        ?: throw FalaiClientException("photo", "Não consegui preparar a foto. Tente de novo.")
+                    try {
+                        client.updateProfile(photo = file)
+                    } finally {
+                        file.delete()
+                    }
+                }
+            },
+        )
+    }
+    }
+    if (showFamily) FamilyDialog(client) { showFamily = false }
 }
 
 @Composable
