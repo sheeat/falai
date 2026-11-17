@@ -306,6 +306,22 @@ fun ChatScreen(client: FalaiClient, conversationId: String, onBack: () -> Unit) 
                         text = { Text("🗑️  Apagar conversa", color = FalaiColors.Error) },
                         onClick = { chatMenuOpen = false; confirmDelete = true },
                     )
+                    if (isAdmin && other != null && other.removed) {
+                        DropdownMenuItem(
+                            text = { Text("↩️  Trazer ${other.name} de volta") },
+                            onClick = {
+                                chatMenuOpen = false
+                                scope.launch {
+                                    try {
+                                        client.restoreUser(other.id)
+                                        Toast.makeText(context, "${other.name} voltou para a família", Toast.LENGTH_SHORT).show()
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, e.message ?: "Não deu agora.", Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            },
+                        )
+                    }
                     if (isAdmin && other != null && !other.isAdmin && !other.removed) {
                         DropdownMenuItem(
                             text = { Text("🚫  Tirar ${other.name} da família", color = FalaiColors.Error) },

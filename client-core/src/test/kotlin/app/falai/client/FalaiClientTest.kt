@@ -742,4 +742,23 @@ class FalaiClientTest {
         val e = assertFailsWith<FalaiClientException> { chefe.removeUser(chefe.account.value!!.userId) }
         assertEquals("invalid", e.code)
     }
+
+    @Test
+    fun `administrador traz de volta quem saiu e o aparelho volta sozinho`() = runBlocking<Unit> {
+        val (chefe, ana, conv) = family()
+        val anaId = ana.account.value!!.userId
+        chefe.send(conv, "antes")
+        eventually("Ana receber") { bodies(ana, conv) == listOf("antes") }
+        chefe.removeUser(anaId)
+        eventually("Ana ser desligada") { ana.connection.value == ConnectionState.UNAUTHORIZED }
+
+        val u = chefe.restoreUser(anaId)
+        assertEquals(false, u.removed)
+        assertTrue(chefe.store.activeUsers().any { it.id == anaId })
+        // A Ana abre o app de novo: conecta com a mesma conta, sem convite, e recebe o que perdeu.
+        chefe.send(conv, "voltou!")
+        ana.reconnectNow()
+        online(ana)
+        eventually("Ana receber depois de voltar") { bodies(ana, conv) == listOf("antes", "voltou!") }
+    }
 }

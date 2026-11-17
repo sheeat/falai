@@ -102,7 +102,10 @@ fun FamilyDialog(client: FalaiClient, onDismiss: () -> Unit) {
     val changes by client.changes.collectAsState()
     val me = client.account.collectAsState().value?.userId
     val people = remember(changes) { client.store.activeUsers() }
+    val removed = remember(changes) { client.store.users().filter { it.removed } }
     var removing by remember { mutableStateOf<UserDto?>(null) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Pessoas da família") },
@@ -121,6 +124,31 @@ fun FamilyDialog(client: FalaiClient, onDismiss: () -> Unit) {
                         }
                         if (u.id != me && !u.isAdmin) {
                             TextButton(onClick = { removing = u }) { Text("Tirar", color = FalaiColors.Error) }
+                        }
+                    }
+                }
+                if (removed.isNotEmpty()) {
+                    item {
+                        Text(
+                            "Fora da família", fontWeight = FontWeight.SemiBold, fontSize = 14.sp,
+                            color = FalaiColors.TextSec, modifier = Modifier.padding(top = 14.dp, bottom = 4.dp),
+                        )
+                    }
+                    items(removed, key = { "r" + it.id }) { u ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Avatar(u.name, size = 40.dp, client = client, mediaId = u.avatarMediaId)
+                            Spacer(Modifier.width(12.dp))
+                            Text(u.name, fontSize = 16.sp, color = FalaiColors.TextSec, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            TextButton(onClick = {
+                                scope.launch {
+                                    try {
+                                        client.restoreUser(u.id)
+                                        Toast.makeText(context, "${u.name} voltou para a família", Toast.LENGTH_SHORT).show()
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, e.message ?: "Não deu agora. Tente de novo.", Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            }) { Text("Trazer de volta", color = FalaiColors.Primary) }
                         }
                     }
                 }

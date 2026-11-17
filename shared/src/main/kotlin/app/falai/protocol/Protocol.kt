@@ -17,7 +17,7 @@ import kotlinx.serialization.json.Json
 const val PROTOCOL_VERSION = 1
 
 /** Versão do Falaí (servidor e página web). O app usa a do build.gradle. */
-const val FALAI_VERSION = "0.9.0"
+const val FALAI_VERSION = "0.9.1"
 
 val FalaiJson = Json {
     classDiscriminator = "type"
@@ -249,6 +249,10 @@ data class HideConversationFrame(val requestId: String, val conversationId: Stri
 /** Só o administrador: tira a pessoa da família. Os aparelhos dela são desligados na hora. */
 @Serializable @SerialName("remove_user")
 data class RemoveUserFrame(val requestId: String, val userId: String) : ClientFrame
+
+/** Só o administrador: traz de volta quem foi tirado da família (com os mesmos aparelhos e conversas). */
+@Serializable @SerialName("restore_user")
+data class RestoreUserFrame(val requestId: String, val userId: String) : ClientFrame
 
 @Serializable @SerialName("ping")
 data class PingFrame(val requestId: String) : ClientFrame

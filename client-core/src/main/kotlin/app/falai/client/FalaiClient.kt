@@ -266,6 +266,11 @@ class FalaiClient(
      * [force] = true (botão "Reconectar"): derruba e refaz a conexão mesmo se parecer online.
      */
     fun reconnectNow(force: Boolean = false) {
+        // Desligado pelo servidor (ex.: tirado da família e trazido de volta): tenta de novo do zero.
+        if (loop?.isActive != true && store.account() != null) {
+            start()
+            return
+        }
         if (force || _connection.value != ConnectionState.ONLINE) socket?.cancel()
         wake.trySend(Unit)
         uploadWake.trySend(Unit)
@@ -507,6 +512,15 @@ class FalaiClient(
         request(id, app.falai.protocol.HideConversationFrame(id, conversationId))
         store.deleteConversation(conversationId)
         bump()
+    }
+
+    /** Só o administrador: traz de volta quem foi tirado da família. */
+    suspend fun restoreUser(userId: String): UserDto {
+        val id = UUID.randomUUID().toString()
+        val u = (request(id, app.falai.protocol.RestoreUserFrame(id, userId)) as UserUpdatedFrame).user
+        store.upsertUser(u)
+        bump()
+        return u
     }
 
     /** Só o administrador: tira a pessoa da família (os aparelhos dela são desligados). */

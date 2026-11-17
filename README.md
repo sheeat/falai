@@ -44,6 +44,7 @@ Mensageiro da família. Um celular antigo fica em casa como servidor, e os celul
 - **Convite e app já com o código:** o servidor "carimba" o convite dentro do arquivo do app na hora do download (na área da assinatura que o Android ignora; a assinatura continua válida). Ao abrir, o app já tem o convite: a pessoa só confirma o nome. O administrador pode escrever o nome da pessoa ao convidar, e ele já vem preenchido. O app baixado em `/app/falai.apk` vem com o endereço do servidor.
 - **Apagar conversa** (segurar o dedo na conversa, ou ⋮ dentro dela; no computador, ⋮ ou botão direito): some da lista em todos os seus aparelhos; para os outros nada muda; se chegar mensagem nova, ela volta só com as novas.
 - **Tirar alguém da família** (só o administrador: ⋮ na conversa, ou *Configurações → Pessoas da família*): os aparelhos da pessoa são desligados na hora; as mensagens antigas ficam.
+- **Trazer de volta** (0.9.1, só o administrador: *Configurações → Pessoas da família → Fora da família*, ou ⋮ na conversa): a pessoa volta com os mesmos aparelhos, sem convite novo; é só ela abrir o Falaí.
 - **Fundo das conversas:** cor calma com desenhinhos clarinhos (7 cores, desenhos liga/desliga, ou uma foto da galeria). *Configurações → Fundo das conversas* (no computador, na engrenagem).
 - **Ícone próprio** (casa-balão com coração) no app, no servidor, nos avisos, na tela de abertura; favicon, ícone de "instalar" e página do convite com a marca no computador.
 - Configurações mais limpas: só conexão e versão.

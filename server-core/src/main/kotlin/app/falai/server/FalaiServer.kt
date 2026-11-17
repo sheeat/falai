@@ -364,6 +364,7 @@ class FalaiServer(
         is CreateInviteFrame -> f.requestId
         is HideConversationFrame -> f.requestId
         is RemoveUserFrame -> f.requestId
+        is RestoreUserFrame -> f.requestId
         is PingFrame -> f.requestId
         is SetPublicAddressFrame -> f.requestId
         is ApproveWebFrame -> f.requestId
@@ -466,6 +467,13 @@ class FalaiServer(
                 val cleared = store.hideConversation(device.user.id, f.conversationId)
                 reply(ConversationHiddenFrame(f.requestId, f.conversationId, cleared))
                 hub.deliver(listOf(device.user.id), ConversationHiddenFrame(null, f.conversationId, cleared), exceptDeviceId = device.deviceId)
+            }
+
+            is RestoreUserFrame -> {
+                val u = store.restoreUser(device.user, f.userId)
+                log("${conn.name} trouxe ${u.name} de volta para a família")
+                reply(UserUpdatedFrame(f.requestId, u))
+                hub.deliverAll(UserUpdatedFrame(null, u), exceptDeviceId = device.deviceId)
             }
 
             is RemoveUserFrame -> {

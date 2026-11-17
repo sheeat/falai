@@ -328,6 +328,7 @@
       <div id="chatMenu" class="menu hidden" style="right:12px;top:58px">
         <button id="mnClear" class="danger">🗑️  Apagar conversa</button>
         <button id="mnRemove" class="danger hidden"></button>
+        <button id="mnRestore" class="hidden"></button>
       </div>
       <div id="messages"></div>
       <div id="composer">
@@ -947,7 +948,21 @@
     var canRemove = state.me && state.me.isAdmin && u && !u.isAdmin && !u.removed;
     $("mnRemove").classList.toggle("hidden", !canRemove);
     if (canRemove) $("mnRemove").textContent = "🚫  Tirar " + u.name + " da família";
+    var canRestore = state.me && state.me.isAdmin && u && u.removed;
+    $("mnRestore").classList.toggle("hidden", !canRestore);
+    if (canRestore) $("mnRestore").textContent = "↩️  Trazer " + u.name + " de volta";
     $("chatMenu").classList.toggle("hidden");
+  };
+  $("mnRestore").onclick = async function () {
+    $("chatMenu").classList.add("hidden");
+    var o = otherId(state.convs[state.current]);
+    if (!o) return;
+    try {
+      var f = await request({ type: "restore_user", userId: o });
+      state.users[f.user.id] = f.user;
+      renderChat();
+      toast(f.user.name + " voltou para a família.");
+    } catch (e) { toast(e.message); }
   };
   document.addEventListener("click", function (e) {
     if (!$("chatMenu").contains(e.target)) $("chatMenu").classList.add("hidden");

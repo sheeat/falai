@@ -239,6 +239,42 @@ class V09Test {
     }
 
     @Test
+    fun `administrador traz de volta quem saiu da familia`() = runBlocking<Unit> {
+        val admin = pair(adminCode, "Edson")
+        val ana = pair(invite(admin.token).code, "Ana", installKey = keyAna)
+        val bia = pair(invite(admin.token).code, "Bia")
+        val (a, _) = hello(admin.token)
+        a.send(RemoveUserFrame("r", ana.userId))
+        a.await<UserUpdatedFrame>()
+        assertNull(store.authenticate(ana.token))
+
+        // Quem não é administrador não pode trazer de volta.
+        val (b, _) = hello(bia.token)
+        b.send(RestoreUserFrame("x", ana.userId))
+        assertEquals("forbidden", b.await<ErrorFrame>().code)
+
+        a.send(RestoreUserFrame("v", ana.userId))
+        assertFalse(a.await<UserUpdatedFrame>().user.removed)
+        assertFalse(b.await<UserUpdatedFrame>().user.removed)
+        assertFalse(store.listUsers().first { it.id == ana.userId }.removed)
+        // O aparelho dela volta a funcionar sem convite: a chave antiga e a volta pelo aparelho.
+        assertNotNull(store.authenticate(ana.token))
+        val (_, h0) = hello(ana.token)
+        assertEquals(ana.userId, h0.user.id)
+        val back = reconnect(keyAna)
+        assertEquals(HttpStatusCode.OK, back.status)
+        val newToken = FalaiJson.decodeFromString(PairResponse.serializer(), back.bodyAsText()).token
+        val (_, h) = hello(newToken)
+        assertEquals(ana.userId, h.user.id)
+        // E dá para conversar com ela de novo.
+        a.send(CreateConversationFrame("c", "direct", null, listOf(ana.userId)))
+        a.await<ConversationFrame>()
+        // Trazer de volta quem já está na família não faz mal.
+        a.send(RestoreUserFrame("v2", ana.userId))
+        assertFalse(a.await<UserUpdatedFrame>().user.removed)
+    }
+
+    @Test
     fun `convite com nome e app carimbado com o convite`() = runBlocking<Unit> {
         val admin = pair(adminCode, "Edson")
         val inv = invite(admin.token, name = "Vó Maria")

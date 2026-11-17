@@ -404,6 +404,20 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
     // ---------- Falaí no computador ----------
 
     /** Liga um aparelho novo (o navegador) à pessoa, sem convite: ela aprovou pelo celular. */
+    /**
+     * Só o administrador: traz de volta quem foi tirado da família. Os aparelhos desligados na
+     * hora da saída voltam a funcionar (a pessoa só precisa abrir o app de novo).
+     */
+    fun restoreUser(by: UserDto, userId: String): UserDto = db.transaction {
+        if (!by.isAdmin) throw FalaiException("forbidden", "Só o administrador traz alguém de volta.")
+        val removedAt = db.query("SELECT removed_at FROM users WHERE id = ?", userId).firstOrNull()
+            ?: throw FalaiException("not_found", "Pessoa não encontrada.")
+        val at = removedAt.longOrNull("removed_at") ?: return@transaction userById(userId)!!
+        db.update("UPDATE users SET removed_at = NULL WHERE id = ?", userId)
+        db.update("UPDATE devices SET revoked_at = NULL WHERE user_id = ? AND revoked_at = ?", userId, at)
+        userById(userId)!!
+    }
+
     fun createLinkedDevice(userId: String, name: String): Pair<String, String> {
         val u = userById(userId) ?: throw FalaiException("not_found", "Pessoa não encontrada.")
         if (u.removed) throw FalaiException("forbidden", "Pessoa fora da família.")
