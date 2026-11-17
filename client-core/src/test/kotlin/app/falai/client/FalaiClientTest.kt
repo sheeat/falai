@@ -18,6 +18,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
@@ -781,5 +782,76 @@ class FalaiClientTest {
         ana.stop(); ana.start()
         online(ana)
         assertEquals(21L, ana.latestApp.value?.versionCode)
+    }
+
+    // ---------- 0.10 ----------
+
+    @Test
+    fun `responder, reagir, apagar para todos e tiques`() = runBlocking<Unit> {
+        val (chefe, ana, conv) = family()
+        val anaId = ana.account.value!!.userId
+        val chefeId = chefe.account.value!!.userId
+        val m1 = chefe.send(conv, "Bom dia!")
+        eventually("Ana receber") { bodies(ana, conv) == listOf("Bom dia!") }
+        // A Ana recebeu: ✓✓ cinza para o Chefe. Abriu a conversa: ✓✓ azul.
+        eventually("✓✓ entregue") { chefe.displayStatus(chefe.store.messageById(m1.id)!!) == MessageStatus.DELIVERED }
+        ana.markRead(conv)
+        eventually("✓✓ lida") { chefe.displayStatus(chefe.store.messageById(m1.id)!!) == MessageStatus.READ }
+
+        val r = ana.send(conv, "Bom dia, pai", replyToId = m1.id)
+        eventually("resposta chegar") { chefe.store.messageById(r.id)?.replyToId == m1.id }
+
+        ana.react(conv, m1.id, "❤️")
+        assertEquals(mapOf(anaId to "❤️"), ana.store.messageById(m1.id)!!.reactions)
+        eventually("reação chegar") { chefe.store.messageById(m1.id)?.reactions == mapOf(anaId to "❤️") }
+        ana.react(conv, m1.id, "")
+        eventually("reação sair") { chefe.store.messageById(m1.id)?.reactions?.isEmpty() == true }
+
+        // Só quem escreveu apaga para todos.
+        val e = assertFailsWith<FalaiClientException> { ana.deleteForEveryone(ana.store.messageById(m1.id)!!) }
+        assertEquals("forbidden", e.code)
+        chefe.deleteForEveryone(chefe.store.messageById(m1.id)!!)
+        assertTrue(chefe.store.messageById(m1.id)!!.deleted)
+        eventually("apagar na Ana") { ana.store.messageById(m1.id)?.deleted == true }
+        assertEquals("", ana.store.messageById(m1.id)!!.body)
+        assertEquals(ClientStore.DELETED_LABEL, ana.store.conversationSummaries(anaId).first { it.id == conv }.let {
+            // a última é a resposta da Ana; a apagada aparece no lugar certo da conversa
+            ana.store.messages(conv).first().let { m -> if (m.deleted) ClientStore.DELETED_LABEL else m.body }
+        })
+
+        // Aparelho novo da Ana: recebe tudo já com o estado certo (apagada, sem reação extra).
+        val tablet = newClient("ana-tablet-10")
+        tablet.pair(url, chefe.createInvite(anaId).code, "Tablet", null)
+        online(tablet)
+        eventually("tablet sincronizar") { tablet.store.messages(conv).size == 2 }
+        assertTrue(tablet.store.messageById(m1.id)!!.deleted)
+        assertEquals(m1.id, tablet.store.messageById(r.id)!!.replyToId)
+        assertEquals(chefeId, chefe.account.value!!.userId)
+    }
+
+    @Test
+    fun `grupo - por, tirar, nome e sair`() = runBlocking<Unit> {
+        val (chefe, ana, _) = family()
+        val anaId = ana.account.value!!.userId
+        val chefeId = chefe.account.value!!.userId
+        val bia = newClient("bia")
+        bia.pair(url, chefe.createInvite().code, "Celular da Bia", "Bia")
+        online(bia)
+        val biaId = bia.account.value!!.userId
+        val g = ana.createConversation("group", "Primos", listOf(chefeId))
+        eventually("Chefe ver o grupo") { chefe.store.conversationSummaries(chefeId).any { it.id == g.id } }
+
+        chefe.updateGroup(g.id, title = "Primos ❤️", add = listOf(biaId))
+        eventually("Bia entrar") { bia.store.conversationSummaries(biaId).any { it.id == g.id && it.displayName == "Primos ❤️" } }
+        eventually("aviso no grupo") { ana.store.messages(g.id).any { it.isSystem && it.body == "Chefe adicionou Bia" } }
+
+        // A Ana (quem criou) tira a Bia: o grupo continua na lista dela, mas sem poder escrever.
+        ana.updateGroup(g.id, remove = listOf(biaId))
+        eventually("Bia saber") { bia.store.conversationSummaries(biaId).first { it.id == g.id }.iAmMember == false }
+        eventually("aviso para a Bia") { bia.store.messages(g.id).any { it.body == "Ana tirou Bia do grupo" } }
+
+        chefe.leaveGroup(g.id)
+        eventually("Ana ver que o Chefe saiu") { ana.store.conversationSummaries(anaId).first { it.id == g.id }.memberIds == listOf(anaId) }
+        assertFalse(chefe.store.conversationSummaries(chefeId).first { it.id == g.id }.iAmMember)
     }
 }

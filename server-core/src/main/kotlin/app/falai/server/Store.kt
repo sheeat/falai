@@ -143,6 +143,28 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
                 db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '5')")
             }
         }
+        if (version < 6) {
+            db.transaction {
+                // 0.10: mexer no grupo, responder, reagir, apagar para todos, tiques ✓✓.
+                db.execute("ALTER TABLE conversations ADD COLUMN avatar_media_id TEXT")
+                // left_seq: saiu (ou foi tirado) do grupo nesta mensagem; null = participa.
+                db.execute("ALTER TABLE members ADD COLUMN left_seq INTEGER")
+                db.execute("ALTER TABLE members ADD COLUMN delivered_seq INTEGER NOT NULL DEFAULT 0")
+                db.execute("ALTER TABLE members ADD COLUMN read_seq INTEGER NOT NULL DEFAULT 0")
+                db.execute("ALTER TABLE messages ADD COLUMN kind TEXT")
+                db.execute("ALTER TABLE messages ADD COLUMN ref_id TEXT")
+                db.execute("ALTER TABLE messages ADD COLUMN reply_to_id TEXT")
+                db.execute("ALTER TABLE messages ADD COLUMN deleted_at INTEGER")
+                db.execute(
+                    """CREATE TABLE reactions (
+                        message_id TEXT NOT NULL,
+                        user_id TEXT NOT NULL,
+                        emoji TEXT NOT NULL,
+                        PRIMARY KEY (message_id, user_id))"""
+                )
+                db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '6')")
+            }
+        }
     }
 
     // ---------- Utilidades ----------
@@ -486,12 +508,29 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
             title = c.stringOrNull("title"),
             memberIds = memberIds(id),
             createdAt = c.long("created_at"),
+            avatarMediaId = c.stringOrNull("avatar_media_id"),
+            createdBy = c.stringOrNull("created_by"),
+            receipts = receipts(id),
         )
     }
 
+    /** Quem participa hoje (quem saiu do grupo fica de fora). */
     fun memberIds(conversationId: String): List<String> =
-        db.query("SELECT user_id FROM members WHERE conversation_id = ? ORDER BY user_id", conversationId)
+        db.query("SELECT user_id FROM members WHERE conversation_id = ? AND left_seq IS NULL ORDER BY user_id", conversationId)
             .map { it.string("user_id") }
+
+    fun receipts(conversationId: String): List<ReceiptDto> =
+        db.query(
+            "SELECT user_id, delivered_seq, read_seq FROM members WHERE conversation_id = ? AND left_seq IS NULL ORDER BY user_id",
+            conversationId,
+        ).map { ReceiptDto(it.string("user_id"), it.long("delivered_seq"), it.long("read_seq")) }
+
+    /** Tem (ou teve) a conversa na lista: participa ou já saiu do grupo. */
+    private fun hasMemberRow(conversationId: String, userId: String): Boolean =
+        db.query("SELECT 1 AS x FROM members WHERE conversation_id = ? AND user_id = ?", conversationId, userId).isNotEmpty()
+
+    private fun lastSeqOf(conversationId: String): Long =
+        db.query("SELECT COALESCE(MAX(seq), 0) AS s FROM messages WHERE conversation_id = ?", conversationId).first().long("s")
 
     /** A conversa como [userId] vê: com o ponto até onde ela apagou (se apagou). */
     fun conversationFor(id: String, userId: String): ConversationDto? {
@@ -512,8 +551,8 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
      * agora não voltam mais. Se chegar mensagem nova, a conversa reaparece só com as novas.
      */
     fun hideConversation(userId: String, conversationId: String): Long = db.transaction {
-        if (!isMember(conversationId, userId)) throw FalaiException("forbidden", "Você não participa desta conversa.")
-        val last = db.query("SELECT COALESCE(MAX(seq), 0) AS s FROM messages WHERE conversation_id = ?", conversationId).first().long("s")
+        if (!hasMemberRow(conversationId, userId)) throw FalaiException("forbidden", "Você não participa desta conversa.")
+        val last = lastSeqOf(conversationId)
         db.update(
             "UPDATE members SET hidden = 1, cleared_seq = ? WHERE conversation_id = ? AND user_id = ?",
             last, conversationId, userId,
@@ -523,15 +562,15 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
 
     /** Mensagem nova numa conversa: quem tinha apagado volta a vê-la. Devolve quem "reapareceu". */
     fun unhideForNewMessage(conversationId: String): List<String> = db.transaction {
-        val ids = db.query("SELECT user_id FROM members WHERE conversation_id = ? AND hidden = 1", conversationId)
+        val ids = db.query("SELECT user_id FROM members WHERE conversation_id = ? AND hidden = 1 AND left_seq IS NULL", conversationId)
             .map { it.string("user_id") }
-        if (ids.isNotEmpty()) db.update("UPDATE members SET hidden = 0 WHERE conversation_id = ?", conversationId)
+        if (ids.isNotEmpty()) db.update("UPDATE members SET hidden = 0 WHERE conversation_id = ? AND left_seq IS NULL", conversationId)
         ids
     }
 
     fun isMember(conversationId: String, userId: String): Boolean =
         db.query(
-            "SELECT 1 AS x FROM members WHERE conversation_id = ? AND user_id = ?", conversationId, userId,
+            "SELECT 1 AS x FROM members WHERE conversation_id = ? AND user_id = ? AND left_seq IS NULL", conversationId, userId,
         ).isNotEmpty()
 
     // ---------- Mensagens ----------
@@ -562,17 +601,169 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
             // Os dados confiáveis vêm do servidor; do cliente só o tipo, a duração e a miniatura.
             a.copy(mime = m.mime, name = m.name, size = m.size, sha256 = m.sha256, thumb = sanitizeThumb(a.thumb))
         }
+        // Resposta: só vale para uma mensagem da mesma conversa.
+        val replyTo = frame.replyToId?.takeIf { r ->
+            db.query("SELECT 1 AS x FROM messages WHERE id = ? AND conversation_id = ? AND kind IS NULL", r, frame.conversationId).isNotEmpty()
+        }
         val now = clock()
         val seq = db.insert(
-            """INSERT INTO messages (id, conversation_id, author_id, author_device_id, body, created_at, attachment_json, media_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO messages (id, conversation_id, author_id, author_device_id, body, created_at, attachment_json, media_id, reply_to_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             id, frame.conversationId, device.user.id, device.deviceId, frame.body, now,
-            att?.let { FalaiJson.encodeToString(AttachmentDto.serializer(), it) }, att?.mediaId,
+            att?.let { FalaiJson.encodeToString(AttachmentDto.serializer(), it) }, att?.mediaId, replyTo,
         )
         StoredMessage(
-            MessageDto(seq, id, frame.conversationId, device.user.id, device.deviceId, frame.body, now, att),
+            MessageDto(seq, id, frame.conversationId, device.user.id, device.deviceId, frame.body, now, att, replyToId = replyTo),
             isNew = true,
         )
+    }
+
+    /** Guarda uma mensagem "especial" (aviso do grupo, reação, apagada). */
+    private fun insertEvent(
+        id: String, conversationId: String, device: AuthedDevice, kind: String, body: String, refId: String? = null,
+    ): MessageDto {
+        val now = clock()
+        val seq = db.insert(
+            """INSERT INTO messages (id, conversation_id, author_id, author_device_id, body, created_at, kind, ref_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            id, conversationId, device.user.id, device.deviceId, body, now, kind, refId,
+        )
+        return MessageDto(seq, id, conversationId, device.user.id, device.deviceId, body, now, kind = kind, refId = refId)
+    }
+
+    /** Reação ("" tira). Fica guardada como mensagem (para os aparelhos desligados receberem depois). */
+    fun react(device: AuthedDevice, f: ReactFrame): StoredMessage = db.transaction {
+        val id = f.id.trim()
+        if (id.isEmpty() || id.length > 64) throw FalaiException("invalid", "Id inválido.")
+        messageById(id)?.let { existing ->
+            if (existing.authorId != device.user.id) throw FalaiException("conflict", "Id de mensagem já usado.")
+            return@transaction StoredMessage(existing, isNew = false)
+        }
+        val emoji = f.emoji.trim()
+        if (emoji.length > 16) throw FalaiException("invalid", "Reação inválida.")
+        if (!isMember(f.conversationId, device.user.id)) throw FalaiException("forbidden", "Você não participa desta conversa.")
+        val target = messageById(f.messageId)
+        if (target == null || target.conversationId != f.conversationId || target.kind != null) {
+            throw FalaiException("not_found", "Mensagem não encontrada.")
+        }
+        if (target.deleted) throw FalaiException("invalid", "Essa mensagem foi apagada.")
+        if (emoji.isEmpty()) {
+            db.update("DELETE FROM reactions WHERE message_id = ? AND user_id = ?", target.id, device.user.id)
+        } else {
+            db.execute("INSERT OR REPLACE INTO reactions (message_id, user_id, emoji) VALUES (?, ?, ?)", target.id, device.user.id, emoji)
+        }
+        StoredMessage(insertEvent(id, f.conversationId, device, MessageKinds.REACTION, emoji, target.id), isNew = true)
+    }
+
+    /** Apagar para todos: só quem escreveu. O texto e o anexo somem do servidor. */
+    fun deleteForEveryone(device: AuthedDevice, f: DeleteMessageFrame): StoredMessage = db.transaction {
+        val id = f.id.trim()
+        if (id.isEmpty() || id.length > 64) throw FalaiException("invalid", "Id inválido.")
+        messageById(id)?.let { existing ->
+            if (existing.authorId != device.user.id) throw FalaiException("conflict", "Id de mensagem já usado.")
+            return@transaction StoredMessage(existing, isNew = false)
+        }
+        val target = messageById(f.messageId)
+        if (target == null || target.conversationId != f.conversationId || target.kind != null) {
+            throw FalaiException("not_found", "Mensagem não encontrada.")
+        }
+        if (target.authorId != device.user.id) throw FalaiException("forbidden", "Só quem escreveu pode apagar para todos.")
+        if (!isMember(f.conversationId, device.user.id)) throw FalaiException("forbidden", "Você não participa desta conversa.")
+        db.update(
+            "UPDATE messages SET body = '', attachment_json = NULL, media_id = NULL, deleted_at = ? WHERE id = ?",
+            clock(), target.id,
+        )
+        db.update("DELETE FROM reactions WHERE message_id = ?", target.id)
+        StoredMessage(insertEvent(id, f.conversationId, device, MessageKinds.DELETE, "", target.id), isNew = true)
+    }
+
+    /** Resultado de mexer no grupo: a conversa, o aviso no grupo e quem precisa saber. */
+    data class GroupChange(val conversation: ConversationDto, val notices: List<MessageDto>, val notify: Set<String>)
+
+    private fun nameOf(userId: String) = userById(userId)?.name ?: "Alguém"
+
+    /** Mexer no grupo: nome, foto, pôr e tirar pessoas (com um aviso no grupo para cada coisa). */
+    fun updateGroup(device: AuthedDevice, f: UpdateGroupFrame): GroupChange = db.transaction {
+        val c = conversation(f.conversationId) ?: throw FalaiException("not_found", "Conversa não encontrada.")
+        if (c.kind != "group") throw FalaiException("invalid", "Só dá para mudar grupos.")
+        val me = device.user
+        if (!isMember(c.id, me.id)) throw FalaiException("forbidden", "Você não participa deste grupo.")
+        val before = c.memberIds.toSet()
+        val notices = mutableListOf<MessageDto>()
+        val removedNow = mutableSetOf<String>()
+        fun notice(text: String) { notices += insertEvent(newId(), c.id, device, MessageKinds.SYSTEM, text) }
+
+        f.title?.trim()?.take(80)?.let { t ->
+            if (t.isEmpty()) throw FalaiException("invalid", "O grupo precisa de um nome.")
+            if (t != c.title) {
+                db.update("UPDATE conversations SET title = ? WHERE id = ?", t, c.id)
+                notice("${me.name} mudou o nome do grupo para \"$t\"")
+            }
+        }
+        f.avatarMediaId?.let { mid ->
+            if (mid.isEmpty()) {
+                if (c.avatarMediaId != null) {
+                    db.update("UPDATE conversations SET avatar_media_id = NULL WHERE id = ?", c.id)
+                    notice("${me.name} tirou a foto do grupo")
+                }
+            } else {
+                val m = media(mid) ?: throw FalaiException("invalid", "Foto não encontrada.")
+                if (!m.complete || m.uploaderId != me.id) throw FalaiException("invalid", "Foto inválida.")
+                db.update("UPDATE conversations SET avatar_media_id = ? WHERE id = ?", mid, c.id)
+                notice("${me.name} mudou a foto do grupo")
+            }
+        }
+        for (uid in f.addMemberIds.distinct()) {
+            if (uid in before) continue
+            val u = userById(uid) ?: throw FalaiException("not_found", "Pessoa não encontrada.")
+            if (u.removed) throw FalaiException("invalid", "${u.name} não faz mais parte da família.")
+            // Quem entra vê o grupo a partir de agora (como nos outros mensageiros).
+            val from = lastSeqOf(c.id)
+            if (hasMemberRow(c.id, uid)) {
+                db.update("UPDATE members SET left_seq = NULL, hidden = 0 WHERE conversation_id = ? AND user_id = ?", c.id, uid)
+            } else {
+                db.execute("INSERT INTO members (conversation_id, user_id, cleared_seq) VALUES (?, ?, ?)", c.id, uid, from)
+            }
+            notice("${me.name} adicionou ${u.name}")
+        }
+        val canRemoveOthers = me.isAdmin || c.createdBy == me.id
+        for (uid in f.removeMemberIds.distinct()) {
+            if (uid !in before || uid == me.id) continue
+            if (!canRemoveOthers) throw FalaiException("forbidden", "Só quem criou o grupo (ou o administrador) tira pessoas.")
+            notice("${me.name} tirou ${nameOf(uid)} do grupo")
+            // A pessoa ainda recebe o aviso de que saiu, e nada depois disso.
+            db.update("UPDATE members SET left_seq = ? WHERE conversation_id = ? AND user_id = ?", notices.last().seq, c.id, uid)
+            removedNow += uid
+        }
+        val after = conversation(c.id)!!
+        GroupChange(after, notices, before + after.memberIds + removedNow)
+    }
+
+    /** Sair do grupo (o histórico fica no aparelho, mas não chega mais nada). */
+    fun leaveGroup(device: AuthedDevice, conversationId: String): GroupChange = db.transaction {
+        val c = conversation(conversationId) ?: throw FalaiException("not_found", "Conversa não encontrada.")
+        if (c.kind != "group") throw FalaiException("invalid", "Só dá para sair de grupos.")
+        if (!isMember(c.id, device.user.id)) throw FalaiException("invalid", "Você já saiu deste grupo.")
+        val n = insertEvent(newId(), c.id, device, MessageKinds.SYSTEM, "${device.user.name} saiu do grupo")
+        db.update("UPDATE members SET left_seq = ? WHERE conversation_id = ? AND user_id = ?", n.seq, c.id, device.user.id)
+        GroupChange(conversation(c.id)!!, listOf(n), c.memberIds.toSet())
+    }
+
+    /** "Recebi/li até aqui". Devolve o novo estado se mudou (para avisar os outros), ou null. */
+    fun updateReceipt(userId: String, conversationId: String, delivered: Long, read: Long): ReceiptDto? = db.transaction {
+        val row = db.query(
+            "SELECT delivered_seq, read_seq FROM members WHERE conversation_id = ? AND user_id = ? AND left_seq IS NULL",
+            conversationId, userId,
+        ).firstOrNull() ?: return@transaction null
+        val last = lastSeqOf(conversationId)
+        val newRead = maxOf(row.long("read_seq"), read.coerceIn(0, last))
+        val newDelivered = maxOf(row.long("delivered_seq"), delivered.coerceIn(0, last), newRead)
+        if (newRead == row.long("read_seq") && newDelivered == row.long("delivered_seq")) return@transaction null
+        db.update(
+            "UPDATE members SET delivered_seq = ?, read_seq = ? WHERE conversation_id = ? AND user_id = ?",
+            newDelivered, newRead, conversationId, userId,
+        )
+        ReceiptDto(userId, newDelivered, newRead)
     }
 
     private fun rowToMessage(r: Row) = MessageDto(
@@ -584,21 +775,40 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
         body = r.string("body"),
         createdAt = r.long("created_at"),
         attachment = r.stringOrNull("attachment_json")?.let { FalaiJson.decodeFromString(AttachmentDto.serializer(), it) },
+        kind = r.stringOrNull("kind"),
+        refId = r.stringOrNull("ref_id"),
+        replyToId = r.stringOrNull("reply_to_id"),
+        deleted = r.longOrNull("deleted_at") != null,
     )
 
+    /** Junta as reações às mensagens (uma consulta só para a lista toda). */
+    private fun withReactions(list: List<MessageDto>): List<MessageDto> {
+        val ids = list.filter { it.kind == null && !it.deleted }.map { it.id }
+        if (ids.isEmpty()) return list
+        val byMsg = HashMap<String, MutableMap<String, String>>()
+        for (chunk in ids.chunked(400)) {
+            db.query(
+                "SELECT message_id, user_id, emoji FROM reactions WHERE message_id IN (${chunk.joinToString(",") { "?" }})",
+                *chunk.toTypedArray(),
+            ).forEach { byMsg.getOrPut(it.string("message_id")) { linkedMapOf() }[it.string("user_id")] = it.string("emoji") }
+        }
+        if (byMsg.isEmpty()) return list
+        return list.map { m -> byMsg[m.id]?.let { m.copy(reactions = it) } ?: m }
+    }
+
     fun messageById(id: String): MessageDto? =
-        db.query("SELECT * FROM messages WHERE id = ?", id).firstOrNull()?.let(::rowToMessage)
+        db.query("SELECT * FROM messages WHERE id = ?", id).firstOrNull()?.let { withReactions(listOf(rowToMessage(it))).first() }
 
     /** Mensagens das conversas da pessoa com seq maior que [afterSeq], em ordem. */
     fun messagesSince(userId: String, afterSeq: Long, limit: Int): List<MessageDto> =
         db.query(
             """SELECT m.* FROM messages m
                JOIN members mb ON mb.conversation_id = m.conversation_id AND mb.user_id = ?
-               WHERE m.seq > ? AND m.seq > mb.cleared_seq
+               WHERE m.seq > ? AND m.seq > mb.cleared_seq AND (mb.left_seq IS NULL OR m.seq <= mb.left_seq)
                ORDER BY m.seq
                LIMIT ?""",
             userId, afterSeq, limit,
-        ).map(::rowToMessage)
+        ).map(::rowToMessage).let(::withReactions)
 
     fun lastSeqFor(userId: String): Long =
         db.query(
@@ -643,7 +853,8 @@ class Store(private val db: Db, private val clock: () -> Long = System::currentT
 
     /** Quem pode baixar: quem enviou, ou quem participa de uma conversa onde o anexo apareceu. */
     fun isAvatar(mediaId: String): Boolean =
-        db.query("SELECT 1 AS x FROM users WHERE avatar_media_id = ? LIMIT 1", mediaId).isNotEmpty()
+        db.query("SELECT 1 AS x FROM users WHERE avatar_media_id = ? LIMIT 1", mediaId).isNotEmpty() ||
+            db.query("SELECT 1 AS x FROM conversations WHERE avatar_media_id = ? LIMIT 1", mediaId).isNotEmpty()
 
     fun canDownload(mediaId: String, userId: String): Boolean {
         val m = media(mediaId) ?: return false

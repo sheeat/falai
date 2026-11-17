@@ -288,7 +288,7 @@ class FalaiClient(
         val events = Channel<Event>(Channel.UNLIMITED)
         val timedOut = java.util.concurrent.atomic.AtomicBoolean(false)
         val req = Request.Builder()
-            .url("${acc.serverUrl}/ws")
+            .url("${acc.serverUrl}/ws?${app.falai.protocol.CLIENT_PROTOCOL_PARAM}=${app.falai.protocol.PROTOCOL_VERSION}")
             .header("Authorization", "Bearer ${acc.token}")
             .build()
         val ws = http.newWebSocket(req, object : WebSocketListener() {
@@ -384,13 +384,29 @@ class FalaiClient(
                 sendFrame(ws, ListUsersFrame("hello-users"))
                 sendFrame(ws, SyncFrame(store.syncedSeq()))
                 // Esvazia a fila: tudo que foi escrito sem conexão sai agora, na ordem.
-                store.pending().forEach { sendFrame(ws, SendFrame(it.id, it.conversationId, it.body, it.attachment)) }
+                store.pending().forEach { sendFrame(ws, SendFrame(it.id, it.conversationId, it.body, it.attachment, it.replyToId)) }
                 bump()
                 kickUploads()
             }
-            is AckFrame -> { store.markSent(f.id, f.seq, f.createdAt); bump() }
-            is MessageFrame -> { store.upsertFromServer(f.message, acc.userId); bump() }
-            is SyncBatchFrame -> { f.messages.forEach { store.upsertFromServer(it, acc.userId) }; bump() }
+            is AckFrame -> {
+                store.markSent(f.id, f.seq, f.createdAt)
+                pendingRequests.remove(f.id)?.complete(f)
+                bump()
+            }
+            is MessageFrame -> {
+                store.upsertFromServer(f.message, acc.userId)
+                bump()
+                acknowledgeDelivery(ws, listOf(f.message), acc.userId)
+            }
+            is SyncBatchFrame -> {
+                f.messages.forEach { store.upsertFromServer(it, acc.userId) }
+                bump()
+                acknowledgeDelivery(ws, f.messages, acc.userId)
+            }
+            is app.falai.protocol.ReceiptsFrame -> {
+                store.saveReceipt(f.conversationId, f.receipt)
+                bump()
+            }
             is SyncDoneFrame -> store.setSyncedSeq(maxOf(store.syncedSeq(), f.lastSeq))
             is ConversationFrame -> {
                 store.upsertConversation(f.conversation)
@@ -454,14 +470,101 @@ class FalaiClient(
     // ---------- Ações da tela ----------
 
     /** Escreve a mensagem no banco (aparece na hora com o relógio) e envia se estiver online. */
-    fun send(conversationId: String, body: String): LocalMessage {
+    fun send(conversationId: String, body: String, replyToId: String? = null): LocalMessage {
         val acc = store.account() ?: throw FalaiClientException("not_paired", "Aparelho não pareado.")
         val text = body.trim()
         require(text.isNotEmpty()) { "Mensagem vazia" }
-        val m = store.insertPending(UUID.randomUUID().toString(), conversationId, acc.userId, text)
+        val m = store.insertPending(UUID.randomUUID().toString(), conversationId, acc.userId, text, replyToId)
         bump()
-        if (_connection.value == ConnectionState.ONLINE) sendFrame(socket, SendFrame(m.id, m.conversationId, m.body))
+        if (_connection.value == ConnectionState.ONLINE) sendFrame(socket, SendFrame(m.id, m.conversationId, m.body, replyToId = replyToId))
         return m
+    }
+
+    // ---------- Tiques ✓✓ ----------
+
+    private val deliveredSent = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val readSent = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /** Chegaram mensagens dos outros: avisa o servidor que este aparelho recebeu (✓✓ cinza para quem mandou). */
+    private fun acknowledgeDelivery(ws: WebSocket?, msgs: List<app.falai.protocol.MessageDto>, me: String) {
+        msgs.filter { it.authorId != me && it.kind == null }.groupBy { it.conversationId }.forEach { (conv, list) ->
+            val max = list.maxOf { it.seq }
+            if (max > (deliveredSent[conv] ?: 0)) {
+                deliveredSent[conv] = max
+                sendFrame(ws, app.falai.protocol.ReceiptFrame(conv, deliveredSeq = max))
+            }
+        }
+    }
+
+    /** A pessoa está com a conversa aberta na tela: avisa que leu (✓✓ azul para quem mandou). */
+    fun markRead(conversationId: String) {
+        val me = store.account()?.userId ?: return
+        if (_connection.value != ConnectionState.ONLINE) return
+        val max = store.lastSeqFromOthers(conversationId, me)
+        if (max <= 0 || max <= (readSent[conversationId] ?: 0)) return
+        if (sendFrame(socket, app.falai.protocol.ReceiptFrame(conversationId, readSeq = max))) readSent[conversationId] = max
+    }
+
+    /** Tique da mensagem (✓, ✓✓ cinza, ✓✓ azul...). */
+    fun displayStatus(m: LocalMessage): MessageStatus = store.account()?.userId?.let { store.displayStatus(m, it) } ?: m.status
+
+    // ---------- Reagir e apagar para todos ----------
+
+    /** Reage com [emoji] ("" tira a minha reação). */
+    suspend fun react(conversationId: String, messageId: String, emoji: String) {
+        val me = store.account()?.userId ?: return
+        val id = UUID.randomUUID().toString()
+        request(id, app.falai.protocol.ReactFrame(id, conversationId, messageId, emoji))
+        store.applyReaction(messageId, me, emoji)
+        bump()
+    }
+
+    /** Apaga uma mensagem minha para todos. Ainda na fila: só some daqui (nem chegou a sair). */
+    suspend fun deleteForEveryone(m: LocalMessage) {
+        if (m.seq == null) {
+            store.applyDelete(m.id)
+            store.markFailed(m.id)
+            bump()
+            return
+        }
+        val id = UUID.randomUUID().toString()
+        request(id, app.falai.protocol.DeleteMessageFrame(id, m.conversationId, m.id))
+        store.applyDelete(m.id)
+        bump()
+    }
+
+    // ---------- Grupo ----------
+
+    /**
+     * Muda o grupo: nome, foto ([photo] = JPEG novo, [removePhoto] = tirar), pôr e tirar pessoas.
+     * Todos do grupo veem um aviso ("Ana adicionou Bia").
+     */
+    suspend fun updateGroup(
+        conversationId: String,
+        title: String? = null,
+        photo: java.io.File? = null,
+        removePhoto: Boolean = false,
+        add: List<String> = emptyList(),
+        remove: List<String> = emptyList(),
+    ): ConversationDto {
+        val mediaId = when {
+            photo != null -> try {
+                withContext(Dispatchers.IO) { uploadDirect(photo, "image/jpeg") }
+            } catch (e: IOException) {
+                throw FalaiClientException("network", "Sem conexão para enviar a foto.")
+            }
+            removePhoto -> ""
+            else -> null
+        }
+        val id = UUID.randomUUID().toString()
+        val f = request(id, app.falai.protocol.UpdateGroupFrame(id, conversationId, title?.trim(), mediaId, add, remove)) as ConversationFrame
+        return f.conversation
+    }
+
+    /** Sai do grupo: a conversa fica (para ler), mas não chega mais nada. */
+    suspend fun leaveGroup(conversationId: String): ConversationDto {
+        val id = UUID.randomUUID().toString()
+        return (request(id, app.falai.protocol.LeaveGroupFrame(id, conversationId)) as ConversationFrame).conversation
     }
 
     /**
@@ -738,7 +841,7 @@ class FalaiClient(
         bump()
         val m = store.messageById(o.messageId)
         if (m != null && _connection.value == ConnectionState.ONLINE) {
-            sendFrame(socket, SendFrame(m.id, m.conversationId, m.body, m.attachment))
+            sendFrame(socket, SendFrame(m.id, m.conversationId, m.body, m.attachment, m.replyToId))
         }
     }
 

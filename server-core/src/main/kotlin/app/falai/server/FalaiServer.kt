@@ -73,7 +73,7 @@ class FailureLimiter(private val max: Int, private val windowMs: Long, private v
  * um aparelho lento não trave a entrega para os outros.
  */
 class Hub {
-    class Conn(val device: AuthedDevice) {
+    class Conn(val device: AuthedDevice, val protocol: Int = 1) {
         val outbox = Channel<ServerFrame>(capacity = 1000)
         /** Nome atual da pessoa (muda se ela trocar o nome com o aparelho conectado). */
         @Volatile var name: String = device.user.name
@@ -296,14 +296,18 @@ class FalaiServer(
             close(CloseReason(4001, "unauthorized"))
             return
         }
-        val conn = Hub.Conn(device)
+        val clientProtocol = call.request.queryParameters[CLIENT_PROTOCOL_PARAM]?.toIntOrNull() ?: 1
+        val conn = Hub.Conn(device, clientProtocol)
         hub.add(conn)
         log("Conectado: ${device.user.name} (${device.deviceId.take(8)})")
 
         // Escritor: tudo que vai para este aparelho passa pela fila, em ordem.
         val writer = launch {
             try {
-                for (f in conn.outbox) send(Frame.Text(json(f)))
+                for (f in conn.outbox) {
+                    val out = forProtocol(f, conn.protocol) ?: continue
+                    send(Frame.Text(json(out)))
+                }
             } catch (_: ClosedSendChannelException) {
             } finally {
                 // Fila fechada (aparelho travado ou desconectado): encerra a conexão.
@@ -367,6 +371,11 @@ class FalaiServer(
         is HideConversationFrame -> f.requestId
         is RemoveUserFrame -> f.requestId
         is RestoreUserFrame -> f.requestId
+        is ReactFrame -> f.id
+        is DeleteMessageFrame -> f.id
+        is UpdateGroupFrame -> f.requestId
+        is LeaveGroupFrame -> f.requestId
+        is ReceiptFrame -> null
         is PingFrame -> f.requestId
         is SetPublicAddressFrame -> f.requestId
         is ApproveWebFrame -> f.requestId
@@ -377,6 +386,33 @@ class FalaiServer(
         is SetTurnFrame -> f.requestId
         is CallLeaveFrame, is CallDeclineFrame, is CallMediaFrame, is CallSignalFrame -> null
         is SyncFrame -> null
+    }
+
+    /**
+     * Aparelho com app antigo: não entende reações nem "apagado para todos" (mostraria como
+     * mensagem solta), então essas ficam de fora; a mensagem apagada chega com um aviso no texto.
+     */
+    private fun forProtocol(f: ServerFrame, protocol: Int): ServerFrame? {
+        if (protocol >= 2) return f
+        fun old(m: MessageDto): MessageDto? = when {
+            m.kind == MessageKinds.REACTION || m.kind == MessageKinds.DELETE -> null
+            m.deleted -> m.copy(body = "🚫 Mensagem apagada")
+            else -> m
+        }
+        return when (f) {
+            is MessageFrame -> old(f.message)?.let { MessageFrame(it) }
+            is SyncBatchFrame -> SyncBatchFrame(f.messages.mapNotNull(::old))
+            is ReceiptsFrame -> null
+            else -> f
+        }
+    }
+
+    /** Mudou o grupo: cada um recebe a conversa como vê, e depois os avisos (todos os aparelhos, inclusive o que mexeu). */
+    private fun publishGroupChange(ch: Store.GroupChange, exceptDeviceId: String?) {
+        for (uid in ch.notify) {
+            store.conversationFor(ch.conversation.id, uid)?.let { hub.deliver(listOf(uid), ConversationFrame(null, it), exceptDeviceId) }
+        }
+        for (n in ch.notices) hub.deliver(ch.notify, MessageFrame(n))
     }
 
     private fun handleFrame(conn: Hub.Conn, f: ClientFrame, reply: (ServerFrame) -> Unit) {
@@ -443,6 +479,37 @@ class FalaiServer(
                     }
                     hub.deliver(store.memberIds(m.conversationId), MessageFrame(m), exceptDeviceId = device.deviceId)
                 }
+            }
+
+            is ReactFrame -> {
+                val stored = store.react(device, f)
+                val m = stored.message
+                reply(AckFrame(m.id, m.seq, m.createdAt))
+                if (stored.isNew) hub.deliver(store.memberIds(m.conversationId), MessageFrame(m), exceptDeviceId = device.deviceId)
+            }
+
+            is DeleteMessageFrame -> {
+                val stored = store.deleteForEveryone(device, f)
+                val m = stored.message
+                reply(AckFrame(m.id, m.seq, m.createdAt))
+                if (stored.isNew) hub.deliver(store.memberIds(m.conversationId), MessageFrame(m), exceptDeviceId = device.deviceId)
+            }
+
+            is UpdateGroupFrame -> {
+                val ch = store.updateGroup(device, f)
+                reply(ConversationFrame(f.requestId, store.conversationFor(ch.conversation.id, device.user.id)!!))
+                publishGroupChange(ch, exceptDeviceId = device.deviceId)
+            }
+
+            is LeaveGroupFrame -> {
+                val ch = store.leaveGroup(device, f.conversationId)
+                reply(ConversationFrame(f.requestId, store.conversationFor(ch.conversation.id, device.user.id)!!))
+                publishGroupChange(ch, exceptDeviceId = device.deviceId)
+            }
+
+            is ReceiptFrame -> {
+                val r = store.updateReceipt(device.user.id, f.conversationId, f.deliveredSeq, f.readSeq)
+                if (r != null) hub.deliver(store.memberIds(f.conversationId), ReceiptsFrame(f.conversationId, r), exceptDeviceId = device.deviceId)
             }
 
             is SyncFrame -> {

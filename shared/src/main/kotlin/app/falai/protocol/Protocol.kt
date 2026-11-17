@@ -14,7 +14,13 @@ import kotlinx.serialization.json.Json
  * WebSocket (/ws, cabeçalho "Authorization: Bearer <token>"):
  *   cada quadro é um objeto JSON com o campo "type".
  */
-const val PROTOCOL_VERSION = 1
+const val PROTOCOL_VERSION = 2
+
+/**
+ * Versão do protocolo que o aparelho entende, enviada no endereço do WebSocket ("/ws?p=2").
+ * Aparelhos antigos (sem "p") não recebem reações e "apagado para todos" como mensagens soltas.
+ */
+const val CLIENT_PROTOCOL_PARAM = "p"
 
 /** Versão do Falaí (servidor e página web). O app usa a do build.gradle. */
 const val FALAI_VERSION = "0.9.4"
@@ -92,7 +98,27 @@ data class ConversationDto(
     val createdAt: Long,
     /** A pessoa apagou a conversa até esta mensagem: as mais antigas somem dos aparelhos dela. */
     val clearedSeq: Long? = null,
+    /** Grupo: foto (um arquivo já enviado ao servidor), ou null. */
+    val avatarMediaId: String? = null,
+    /** Quem criou (no grupo, quem criou e o administrador da família podem tirar pessoas). */
+    val createdBy: String? = null,
+    /** Até onde cada participante já recebeu e já leu (para os tiques ✓✓). */
+    val receipts: List<ReceiptDto> = emptyList(),
 )
+
+/** Até qual mensagem (seq) a pessoa já recebeu em algum aparelho e já leu. */
+@Serializable
+data class ReceiptDto(val userId: String, val deliveredSeq: Long = 0, val readSeq: Long = 0)
+
+/** Tipos especiais de [MessageDto.kind]. Null = mensagem normal. */
+object MessageKinds {
+    /** Aviso do grupo ("Ana adicionou Bia"): aparece no meio da conversa, sem balão. */
+    const val SYSTEM = "system"
+    /** Reação: [MessageDto.refId] = mensagem, [MessageDto.body] = emoji ("" = tirou a reação). */
+    const val REACTION = "reaction"
+    /** Apagada para todos: [MessageDto.refId] = mensagem apagada. */
+    const val DELETE = "delete"
+}
 
 @Serializable
 data class MessageDto(
@@ -107,6 +133,16 @@ data class MessageDto(
     val createdAt: Long,
     /** Foto, vídeo, áudio ou arquivo anexado (o arquivo em si é baixado à parte, sob demanda). */
     val attachment: AttachmentDto? = null,
+    /** Null = mensagem normal; veja [MessageKinds]. */
+    val kind: String? = null,
+    /** Reação ou "apagar para todos": a mensagem de que se trata. */
+    val refId: String? = null,
+    /** Resposta a outra mensagem (o id dela). */
+    val replyToId: String? = null,
+    /** Apagada para todos pelo autor (o texto e o anexo já vêm vazios). */
+    val deleted: Boolean = false,
+    /** Reações: pessoa -> emoji. */
+    val reactions: Map<String, String> = emptyMap(),
 )
 
 @Serializable
@@ -215,7 +251,39 @@ data class SendFrame(
     val body: String,
     /** Só depois que o arquivo terminou de subir (MediaStatus.complete). */
     val attachment: AttachmentDto? = null,
+    /** Resposta a outra mensagem da mesma conversa. */
+    val replyToId: String? = null,
 ) : ClientFrame
+
+/** Reagir a uma mensagem ([emoji] = "" tira a reação). Responde com [AckFrame] (pelo [id]). */
+@Serializable @SerialName("react")
+data class ReactFrame(val id: String, val conversationId: String, val messageId: String, val emoji: String) : ClientFrame
+
+/** Apagar para todos (só quem escreveu). Responde com [AckFrame] (pelo [id]). */
+@Serializable @SerialName("delete_message")
+data class DeleteMessageFrame(val id: String, val conversationId: String, val messageId: String) : ClientFrame
+
+/**
+ * Mexer no grupo: nome, foto ([avatarMediaId] = "" tira), pôr e tirar pessoas.
+ * Responde com [ConversationFrame].
+ */
+@Serializable @SerialName("update_group")
+data class UpdateGroupFrame(
+    val requestId: String,
+    val conversationId: String,
+    val title: String? = null,
+    val avatarMediaId: String? = null,
+    val addMemberIds: List<String> = emptyList(),
+    val removeMemberIds: List<String> = emptyList(),
+) : ClientFrame
+
+/** Sair do grupo. Responde com [ConversationFrame] (já sem mim). */
+@Serializable @SerialName("leave_group")
+data class LeaveGroupFrame(val requestId: String, val conversationId: String) : ClientFrame
+
+/** "Recebi até aqui" / "li até aqui" numa conversa (para os tiques ✓✓). Sem resposta. */
+@Serializable @SerialName("receipt")
+data class ReceiptFrame(val conversationId: String, val deliveredSeq: Long = 0, val readSeq: Long = 0) : ClientFrame
 
 @Serializable @SerialName("sync")
 data class SyncFrame(val afterSeq: Long = 0) : ClientFrame
@@ -331,6 +399,10 @@ data class PublicAddressFrame(val requestId: String, val publicBase: String) : S
 /** A conversa foi apagada por mim: sai da lista e as mensagens até [clearedSeq] somem. */
 @Serializable @SerialName("conversation_hidden")
 data class ConversationHiddenFrame(val requestId: String? = null, val conversationId: String, val clearedSeq: Long) : ServerFrame
+
+/** Alguém recebeu ou leu mensagens de uma conversa. */
+@Serializable @SerialName("receipts")
+data class ReceiptsFrame(val conversationId: String, val receipt: ReceiptDto) : ServerFrame
 
 @Serializable @SerialName("pong")
 data class PongFrame(val requestId: String) : ServerFrame
